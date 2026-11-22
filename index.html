@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>유전자 드라이브는 어떻게 퍼질까?</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='14' fill='%2313a99a'/%3E%3Ccircle cx='16' cy='16' r='5' fill='white'/%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <div id="app">
+      <header class="topbar">
+        <div class="title-block">
+          <h1>유전자 드라이브는 어떻게 퍼질까?</h1>
+          <span class="tag">가상 개체군 모형</span>
+        </div>
+
+        <div class="gen-block" aria-live="polite">
+          <span class="gen-num" id="gen-num">0</span>
+          <span class="gen-unit">세대</span>
+          <span class="gen-sub" id="gen-sub">방사 전</span>
+        </div>
+
+        <div class="e-block">
+          <div class="e-top">
+            <label for="e-slider">호밍 효율 e</label>
+            <output id="e-value" for="e-slider">0.8</output>
+          </div>
+          <input type="range" id="e-slider" min="0" max="1" step="0.1" value="0.8" />
+          <div class="e-hint" id="e-hint" aria-live="polite"></div>
+        </div>
+
+        <div class="p-block">
+          <span class="p-caption">D/W 부모의 D 전달 확률</span>
+          <span class="p-value" id="p-value">90%</span>
+        </div>
+
+        <div class="controls">
+          <button id="btn-release" class="btn primary" type="button">가상 방사</button>
+          <button id="btn-step" class="btn" type="button">한 세대 관찰</button>
+          <button id="btn-play" class="btn" type="button"><span class="ico" aria-hidden="true">▶</span><span class="lbl">재생</span></button>
+          <div class="speed" role="group" aria-label="재생 속도">
+            <button type="button" class="on" data-speed="1">1배</button>
+            <button type="button" data-speed="2">2배</button>
+          </div>
+          <button id="btn-reset" class="btn quiet" type="button">처음으로</button>
+        </div>
+      </header>
+
+      <div class="stagebar">
+        <ol class="stages" id="stages">
+          <li data-stage="0"><span>1</span>부모 세대</li>
+          <li data-stage="1"><span>2</span>교배와 유전</li>
+          <li data-stage="2"><span>3</span>자손 등장</li>
+          <li data-stage="3"><span>4</span>세대 교체</li>
+        </ol>
+        <div class="legend" id="legend"></div>
+      </div>
+
+      <main class="habitats" id="habitats">
+        <section class="habitat mendel" data-key="mendel">
+          <canvas aria-label="멘델 유전 집단의 모기"></canvas>
+          <div class="hab-label">
+            <div class="hab-name">멘델 유전</div>
+            <div class="hab-rule">e = 0 고정, D 전달 <b>50%</b></div>
+          </div>
+          <div class="hab-counts"></div>
+          <div class="inspector" hidden></div>
+        </section>
+        <section class="habitat drive" data-key="drive">
+          <canvas aria-label="호밍 드라이브 집단의 모기"></canvas>
+          <div class="hab-label">
+            <div class="hab-name">호밍 드라이브</div>
+            <div class="hab-rule">e = <b class="drive-e">0.8</b>, D 전달 <b class="drive-p">90%</b></div>
+          </div>
+          <div class="hab-counts"></div>
+          <div class="inspector" hidden></div>
+        </section>
+
+        <div class="lmo-card" id="lmo-card" hidden>
+          <button class="close" type="button" aria-label="질문 닫기">×</button>
+          <p class="lmo-q">
+            가상 집단에서 유전정보의 전달 방식만 바꿨는데도 여러 세대 후 구성비가 달라졌습니다.
+            이러한 LMO를 실제 환경에 방출하려면 무엇을 추가로 확인해야 할까요?
+          </p>
+          <button class="btn small" type="button" id="btn-lmo-hints">생각해 볼 관점</button>
+          <ul class="lmo-hints" id="lmo-hints" hidden>
+            <li><b>확산 가능성</b>어디까지, 얼마나 빨리 퍼질 수 있는가</li>
+            <li><b>장기적 지속</b>방사를 멈춘 뒤에도 얼마나 오래 남는가</li>
+            <li><b>생태적 영향</b>다른 생물과 먹이 관계에 어떤 변화가 생길 수 있는가</li>
+            <li><b>모니터링과 대응</b>변화를 추적하고 필요하면 되돌릴 수 있는가</li>
+          </ul>
+        </div>
+      </main>
+
+      <footer class="summary">
+        <div class="sum-pop mendel" id="sum-mendel"></div>
+        <div class="sum-chart">
+          <div class="chart-head">
+            <span class="chart-title">세대별 D 보유 개체 비율</span>
+            <span class="chart-legend"><i class="sw mendel"></i>멘델 <i class="sw drive"></i>호밍</span>
+          </div>
+          <div class="chart-host" id="chart"></div>
+        </div>
+        <div class="sum-pop drive" id="sum-drive"></div>
+        <div class="sum-side">
+          <div class="diff">
+            <span class="diff-caption">두 집단 차이</span>
+            <span class="diff-value" id="diff-value">0%p</span>
+          </div>
+          <button class="btn small accent" type="button" id="btn-lmo">LMO 질문</button>
+          <button class="btn small quiet" type="button" id="btn-model">모형과 출처</button>
+        </div>
+      </footer>
+    </div>
+
+    <dialog id="model-dialog" aria-labelledby="model-title">
+      <div class="dlg-head">
+        <h2 id="model-title">모형과 출처</h2>
+        <button class="close" type="button" aria-label="닫기">×</button>
+      </div>
+      <div class="dlg-body">
+        <section>
+          <h3>모형 가정</h3>
+          <ul>
+            <li>모기 그림 하나는 모형이 계산한 개체 하나입니다. 개체마다 번호, 성별, 유전자형, 세대, 부모 번호를 가집니다.</li>
+            <li>유전자형은 W/W, D/W, D/D 세 가지입니다. W/W 부모는 W만, D/D 부모는 D만 전달합니다.</li>
+            <li>D/W 부모가 D를 전달할 확률은 P(D) = (1 + e) / 2 입니다. e = 0이면 멘델 유전(50%), e = 0.8이면 90%, e = 1이면 100%입니다.</li>
+            <li>자손마다 어미와 아비를 무작위로 고르고, 각 부모가 확률에 따라 대립유전자 하나씩을 줍니다. 그래서 같은 확률이어도 세대마다 우연한 변동이 생깁니다.</li>
+            <li>처음 집단은 W/W 72마리이고, 가상 방사로 D/W 수컷 8마리를 한 번만 도입합니다. 이후 외부에서 들어오는 개체는 없습니다.</li>
+            <li>집단 크기는 세대마다 80마리, 성비는 1:1로 고정합니다. 모든 유전자형의 번식 기여는 같다고 가정합니다.</li>
+            <li>두 집단은 같은 초기 개체와 같은 난수 시드로 계산합니다. 차이는 e 값에서만 생깁니다.</li>
+            <li>e를 바꾸면 이미 태어난 개체는 그대로 두고 다음 세대 계산부터 적용합니다.</li>
+          </ul>
+        </section>
+        <section>
+          <h3>화면 읽는 법</h3>
+          <ul>
+            <li>몸 색: W/W 청회색, D/W 청록색, D/D 진한 녹색. 배의 흰 점 개수는 D 대립유전자 수입니다.</li>
+            <li>더듬이가 깃털 모양인 개체는 수컷입니다. 주황 고리는 0세대에 방사된 개체입니다.</li>
+            <li>세대가 바뀔 때 부모는 흐려지며 물러나고, 자손은 어미 곁에서 새로 나타납니다.</li>
+            <li>모기를 누르면 그 개체의 부모와 물려받은 대립유전자를 볼 수 있습니다.</li>
+          </ul>
+        </section>
+        <section>
+          <h3>이 모형에 넣지 않은 것</h3>
+          <ul>
+            <li>불임이나 적합도 비용, 저항성 대립유전자, 개체 수 감소, 공간 이동, 실제 환경 조건은 포함하지 않았습니다.</li>
+            <li>따라서 결과는 실제 야외 확산 속도나 효과를 예측하지 않습니다. 전달 확률이 자손의 구성비에 주는 영향만 보여 줍니다.</li>
+          </ul>
+        </section>
+        <section>
+          <h3>세대별 기록</h3>
+          <div class="table-wrap"><table id="history-table"></table></div>
+          <p class="note">D 보유 비율은 D/W와 D/D 개체의 비율이고, D 빈도는 전체 대립유전자 중 D의 비율입니다.</p>
+        </section>
+        <section>
+          <h3>출처</h3>
+          <ul class="refs">
+            <li>Burt, A. (2003). Site-specific selfish genes as tools for the control and genetic engineering of natural populations. <i>Proceedings of the Royal Society B</i>, 270, 921–928.</li>
+            <li>Gantz, V. M. et al. (2015). Highly efficient Cas9-mediated gene drive for population modification of the malaria vector mosquito <i>Anopheles stephensi</i>. <i>PNAS</i>, 112(49), E6736–E6743.</li>
+            <li>Hammond, A. et al. (2016). A CRISPR-Cas9 gene drive system targeting female reproduction in the malaria mosquito vector <i>Anopheles gambiae</i>. <i>Nature Biotechnology</i>, 34, 78–83.</li>
+            <li>National Academies of Sciences, Engineering, and Medicine (2016). <i>Gene Drives on the Horizon</i>. The National Academies Press.</li>
+            <li>바이오안전성에 관한 카르타헤나 의정서, 유전자변형생물체의 국가간 이동 등에 관한 법률</li>
+          </ul>
+        </section>
+        <section>
+          <h3>조작</h3>
+          <ul>
+            <li>스페이스: 재생 또는 일시정지, 오른쪽 화살표: 한 세대 관찰(다음 단계)</li>
+            <li>한 세대 관찰은 교배와 유전, 자손 등장 단계에서 멈춥니다. 다시 누르면 다음 단계로 넘어갑니다.</li>
+            <li id="seed-info"></li>
+          </ul>
+        </section>
+      </div>
+    </dialog>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

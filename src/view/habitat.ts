@@ -1,7 +1,7 @@
 import type { Director } from '../model/director';
 import type { PopKey, Transition } from '../model/experiment';
 import type { Mosquito } from '../model/genetics';
-import { drawMosquito, GENO_COLOR } from './mosquito';
+import { drawMosquito, GENO_COLOR, spritesFor, type MosquitoSprites } from './mosquito';
 
 /**
  * 한 서식지의 Canvas 렌더러.
@@ -10,7 +10,7 @@ import { drawMosquito, GENO_COLOR } from './mosquito';
  * 움직임에는 Math.random을 쓰므로 유전 계산용 난수와 섞이지 않는다.
  */
 
-import { FADE_TICKS, TICKS_PER_UNIT, type Community } from '../model/population';
+
 
 type Role = 'adult' | 'parent' | 'child' | 'incoming';
 
@@ -71,10 +71,9 @@ export class Habitat {
   private H = 0;
   private dpr = 1;
   private L = 36;
-  private community: Community | null = null;
-  private flights = new Map<number, Flight>();
-  populationPick: number | null = null;
-  onPopulationPick: () => void = () => {};
+  private atlas!: MosquitoSprites;
+  private parentsById = new Map<number, Sprite>();
+  private study: { carrier: number; color: string } | null = null;
   private adults: Sprite[] = [];
   private parents: Sprite[] = [];
   private children: Sprite[] = [];
@@ -135,6 +134,7 @@ export class Habitat {
 
   /** 처음으로: 현재 집단 그대로 새로 배치 */
   rebuild(): void {
+    this.parentsById.clear();
     this.adults = this.pop.current.map((m) => this.makeSprite(m, 'adult'));
     this.parents = [];
     this.children = [];
@@ -184,7 +184,9 @@ export class Habitat {
     this.parents = this.adults;
     for (const p of this.parents) p.role = 'parent';
     this.adults = [];
-    const byId = new Map(this.parents.map((s) => [s.m.id, s]));
+    const byId = this.parentsById;
+    byId.clear();
+    for (const parent of this.parents) byId.set(parent.m.id, parent);
 
     this.children = t.offspring.map((m) => {
       const s = this.makeSprite(m, 'child', -100, -100);
@@ -241,7 +243,7 @@ export class Habitat {
 
   private finishPending(): void {
     if (!this.parents.length && !this.children.length) return;
-    const byId = new Map(this.parents.map((s) => [s.m.id, s]));
+    const byId = this.parentsById;
     for (const c of this.children) {
       if (!c.spawned) this.spawn(c, byId);
       c.role = 'adult';
@@ -251,6 +253,7 @@ export class Habitat {
     this.adults = this.children;
     this.children = [];
     this.parents = [];
+    this.parentsById.clear();
     for (const s of this.adults) s.meet = undefined;
   }
 
@@ -267,7 +270,7 @@ export class Habitat {
 
   // ---------- 크기 ----------
 
-  private resize(): void {
+  resize(): void {
     const rect = this.canvas.getBoundingClientRect();
     const W = Math.max(1, rect.width);
     const H = Math.max(1, rect.height);
@@ -285,10 +288,6 @@ export class Habitat {
         if (s.ctrl) s.ctrl = { x: s.ctrl.x * sx, y: s.ctrl.y * sy };
       }
     }
-    for (const f of this.flights.values()) {
-      f.x *= sx;
-      f.y *= sy;
-    }
     for (const e of this.examples) e.meet = { x: e.meet.x * sx, y: e.meet.y * sy };
     this.W = W;
     this.H = H;
@@ -296,7 +295,9 @@ export class Habitat {
     this.canvas.width = Math.round(W * dpr);
     this.canvas.height = Math.round(H * dpr);
     this.L = Math.max(22, Math.min(96, 0.7 * Math.sqrt((W * H) / this.director.experiment.config.populationSize)));
+    this.atlas = spritesFor(this.L, dpr);
     this.bg = null;
+    if (this.study) this.paintStudy();
   }
 
   private drawBackground(): HTMLCanvasElement {
@@ -341,22 +342,10 @@ export class Habitat {
   // ---------- 입력 ----------
 
   private handlePointer(ev: PointerEvent): void {
+    if (this.study) return;
     const rect = this.canvas.getBoundingClientRect();
     const x = ev.clientX - rect.left;
     const y = ev.clientY - rect.top;
-    if (this.community) {
-      this.populationPick = null;
-      let nearest = (this.L * 0.7) ** 2;
-      for (const [id, f] of this.flights) {
-        const distance = (f.x - x) ** 2 + (f.y - y) ** 2;
-        if (distance < nearest) {
-          nearest = distance;
-          this.populationPick = id;
-        }
-      }
-      this.onPopulationPick();
-      return;
-    }
     let best: Sprite | null = null;
     let bestD = (this.L * 0.7) ** 2;
     for (const s of this.visibleSprites()) {
@@ -436,77 +425,39 @@ export class Habitat {
     ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
   }
 
-  setCommunity(community: Community | null): void {
-    if (this.community === community) return;
-    this.community = community;
-    this.flights.clear();
-    this.populationPick = null;
+  setStudy(study: { carrier: number; color: string } | null): void {
+    this.study = study;
+    if (study) this.paintStudy();
   }
 
-  frameCommunity(tick: number, dt: number): void {
-    const group = this.community;
-    if (!group) return;
-    const ctx = this.ctx;
+  private paintStudy(): void {
+    if (!this.study) return;
     this.paintBackground();
-    for (const id of this.flights.keys()) {
-      if (!group.living.has(id)) this.flights.delete(id);
-    }
-    if (this.populationPick !== null && !group.living.has(this.populationPick)) {
-      this.populationPick = null;
-      this.onPopulationPick();
-    }
-    for (const m of group.living.values()) {
-      if (this.flights.has(m.id)) continue;
-      const mother = m.mother === null ? undefined : this.flights.get(m.mother);
-      const f = this.makeFlight(mother?.x, mother?.y);
-      if (mother) f.boost = 1;
-      this.flights.set(m.id, f);
-    }
-
-    const meeting = new Set<number>();
-    for (const pair of group.pairs) {
-      const mother = this.flights.get(pair.mother)!;
-      const father = this.flights.get(pair.father)!;
-      const x = (mother.x + father.x) / 2;
-      const y = (mother.y + father.y) / 2;
-      this.steerTo(mother, { x: x - this.L * 0.42, y }, 0, dt, 1);
-      this.steerTo(father, { x: x + this.L * 0.42, y }, Math.PI, dt, 1);
-      meeting.add(pair.mother);
-      meeting.add(pair.father);
-      if (pair === group.pairs[0]) {
-        ctx.save();
-        ctx.strokeStyle = '#56688a';
-        ctx.setLineDash([this.L * 0.12, this.L * 0.1]);
+    const ctx = this.ctx;
+    const columns = 5, rows = 4;
+    const size = Math.min(this.L, this.W / 9, this.H / 10);
+    const colored = this.study.carrier / 100 * columns * rows;
+    // A fractional last icon preserves the reported proportion without inventing genotypes.
+    for (let i = 0; i < rows * columns; i++) {
+      const x = this.W * (0.17 + (i % columns) * 0.165);
+      const y = this.H * (0.255 + Math.floor(i / columns) * 0.145);
+      const icon = { x, y, size, angle: -0.55, genotype: 'WW' as const, sex: 'F' as const, wing: 0, shadow: false };
+      const fill = clamp01(colored - i);
+      if (fill < 1) drawMosquito(ctx, icon);
+      if (fill <= 0) continue;
+      ctx.save();
+      if (fill < 1) {
         ctx.beginPath();
-        ctx.moveTo(mother.x, mother.y);
-        ctx.lineTo(father.x, father.y);
-        ctx.stroke();
-        ctx.restore();
+        ctx.rect(x - size * 0.58, y - size, size * 1.16 * fill, size * 2);
+        ctx.clip();
       }
+      drawMosquito(ctx, { ...icon, ink: { body: this.study.color, dark: this.study.color } });
+      ctx.restore();
     }
+  }
 
-    for (const m of group.living.values()) {
-      const f = this.flights.get(m.id)!;
-      const remaining = m.diesAt - tick;
-      const alpha = Math.min(1, remaining / FADE_TICKS);
-      if (remaining > FADE_TICKS && dt > 0) {
-        f.wing += dt * f.wingRate;
-        if (!meeting.has(m.id)) this.wander(f, dt);
-      }
-      const growth = m.mother === null ? 1 : clamp01((tick - m.bornAt) / (TICKS_PER_UNIT * 0.45));
-      drawMosquito(ctx, { x: f.x, y: f.y, size: this.L * (0.35 + 0.65 * easeOut(growth)),
-        angle: f.heading, genotype: 'WW', sex: m.sex, wing: f.wing, alpha });
-      if (growth < 1 || this.populationPick === m.id) {
-        ctx.save();
-        ctx.globalAlpha = alpha * (this.populationPick === m.id ? 1 : 1 - growth);
-        ctx.strokeStyle = this.populationPick === m.id ? '#e8590c' : GENO_COLOR.WW.dark;
-        ctx.lineWidth = Math.max(2, this.L * 0.06);
-        ctx.beginPath();
-        ctx.arc(f.x, f.y, this.L * (0.4 + 0.3 * growth), 0, TAU);
-        ctx.stroke();
-        ctx.restore();
-      }
-    }
+  private drawSprite(s: Sprite): void {
+    this.atlas.draw(this.ctx, s.x, s.y, s.heading, s.scale, s.m.genotype, s.m.sex, s.wing, s.alpha);
   }
 
   frame(dt: number, time: number): void {
@@ -524,7 +475,7 @@ export class Habitat {
       p = act.progress;
     }
 
-    const parentsById = new Map(this.parents.map((s) => [s.m.id, s]));
+    const parentsById = this.parentsById;
 
     // --- 자손 등장 처리 (타임라인 진행도 기준) ---
     if (stage >= 2) {
@@ -593,45 +544,26 @@ export class Habitat {
     // --- 그리기 ---
     this.paintBackground();
 
-    const draw = (s: Sprite) =>
-      drawMosquito(ctx, {
-        x: s.x,
-        y: s.y,
-        size: L * s.scale,
-        angle: s.heading,
-        genotype: s.m.genotype,
-        sex: s.m.sex,
-        wing: s.wing,
-        alpha: s.alpha,
-      });
-
-    const highlighted = new Set<number>();
-    if (stage === 1 || (stage === 2 && p < 0.4)) {
-      for (const e of this.examples) {
-        highlighted.add(e.mother.id);
-        highlighted.add(e.father.id);
-      }
-    }
-
-    for (const s of this.parents) if (!highlighted.has(s.m.id)) draw(s);
-    for (const s of this.adults) draw(s);
+    const highlightPairs = stage === 1 || (stage === 2 && p < 0.4);
+    for (const s of this.parents) if (!highlightPairs || !s.meet) this.drawSprite(s);
+    for (const s of this.adults) this.drawSprite(s);
 
     // 도입 개체 표시 (0세대)
     if (this.showReleased) {
       const pulse = 0.55 + 0.25 * Math.sin(time * 3.2);
       ctx.lineWidth = Math.max(2, L * 0.07);
       ctx.strokeStyle = `rgba(240, 150, 0, ${pulse})`;
-      for (const s of [...this.adults, ...this.incoming]) {
+      for (const list of [this.adults, this.incoming]) for (const s of list) {
         if (!s.m.released) continue;
         ctx.beginPath();
         ctx.arc(s.x, s.y, L * 0.62, 0, TAU);
         ctx.stroke();
       }
     }
-    for (const s of this.incoming) draw(s);
+    for (const s of this.incoming) this.drawSprite(s);
 
     // 교배 쌍 강조
-    if (highlighted.size) {
+    if (highlightPairs && this.examples.length) {
       // 부모가 거의 모였을 때 쌍 표시가 나타난다
       const a = stage === 1 ? ease(clamp01((p - 0.3) / 0.35)) : 1 - clamp01(p / 0.4);
       for (const e of this.examples) {
@@ -647,7 +579,7 @@ export class Habitat {
         ctx.stroke();
         ctx.restore();
       }
-      for (const s of this.parents) if (highlighted.has(s.m.id)) draw(s);
+      for (const s of this.parents) if (s.meet) this.drawSprite(s);
       ctx.save();
       ctx.globalAlpha = a;
       ctx.fillStyle = '#3d4656';
@@ -672,13 +604,13 @@ export class Habitat {
         ctx.stroke();
         ctx.restore();
       }
-      draw(c);
+      this.drawSprite(c);
     }
 
     // 선택한 개체
     if (this.selectedId != null) {
-      const s = [...this.visibleSprites()].find((v) => v.m.id === this.selectedId);
-      if (s) {
+      for (const s of this.visibleSprites()) {
+        if (s.m.id !== this.selectedId) continue;
         ctx.save();
         ctx.strokeStyle = '#e8590c';
         ctx.lineWidth = Math.max(2.5, L * 0.08);
@@ -688,6 +620,7 @@ export class Habitat {
         ctx.arc(s.x, s.y, L * 0.66, 0, TAU);
         ctx.stroke();
         ctx.restore();
+        break;
       }
     }
 

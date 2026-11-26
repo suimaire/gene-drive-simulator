@@ -39,6 +39,7 @@ export class CarrierChart {
 
   private render(): void {
     const rect = this.host.getBoundingClientRect();
+    if (!rect.width || !rect.height) return;
     const W = Math.max(50, rect.width);
     const H = Math.max(40, rect.height);
     const fs = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;

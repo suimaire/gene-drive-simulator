@@ -10,7 +10,9 @@ import {
   type Genotype,
   type Mosquito,
 } from './model/genetics';
-import { CONDITION_LABEL, INITIAL_COUNT, PopulationObservation, ROUND_TICKS, TICKS_PER_UNIT, type Condition } from './model/population';
+import { cages, StudyPlayback } from './model/study';
+import panelA from './view/figure5a.png?inline';
+import panelB from './view/figure5b.png?inline';
 import { CarrierChart } from './view/chart';
 import { Habitat, type Example, type HabitatPick } from './view/habitat';
 import { mosquitoIcon } from './view/mosquito';
@@ -21,9 +23,8 @@ const seedParam = Number(params.get('seed'));
 const seed = Number.isFinite(seedParam) && params.has('seed') ? Math.floor(seedParam) : DEFAULT_CONFIG.seed;
 
 const director = new Director({ seed });
-let populationMode = false;
-let observation: PopulationObservation | null = null;
-const conditions: Record<PopKey, Condition> = { mendel: 'usual', drive: 'limited' };
+let studyMode = false;
+const study = new StudyPlayback();
 
 const $ = <T extends HTMLElement = HTMLElement>(sel: string, root: ParentNode = document) => root.querySelector(sel) as T;
 
@@ -38,12 +39,7 @@ const ui = {
   step: $<HTMLButtonElement>('#btn-step'),
   play: $<HTMLButtonElement>('#btn-play'),
   reset: $<HTMLButtonElement>('#btn-reset'),
-  mode: $<HTMLInputElement>('#life-toggle'),
-  limit: $<HTMLSelectElement>('#life-limit'),
-  clock: $('#life-clock'),
-  equations: $('#population-equations'),
-  unit: $('.gen-unit'),
-  differenceLabel: $('.diff-caption'),
+  mode: $<HTMLSelectElement>('#mode-select'),
   speedBtns: [...document.querySelectorAll<HTMLButtonElement>('.speed button')],
   stages: [...document.querySelectorAll<HTMLLIElement>('#stages li')],
   legend: $('#legend'),
@@ -91,7 +87,6 @@ for (const key of POP_KEYS) {
     insp: null,
   };
   habitat.onPick = (pick) => onPick(key, pick);
-  habitat.onPopulationPick = () => renderPopulationPick(key);
   habitat.rebuild();
 }
 
@@ -118,8 +113,7 @@ function shownComposition(key: PopKey): Composition {
     // 방사 전(또는 방사 중)에는 기존 집단만
     return summarize(ex.pop(key).current.filter((m) => !m.released));
   }
-  const h = shownHistory(key);
-  return h[h.length - 1].composition;
+  return ex.pop(key).history[shownGeneration()].composition;
 }
 
 // ---------- 갱신 ----------
@@ -127,9 +121,14 @@ function genoSwatch(g: Genotype): string {
   return `<i class="sw-geno ${g}" aria-hidden="true"></i>`;
 }
 
+let summaryKey = '';
+const countViews = new Map<PopKey, string>();
 function renderCounts(): void {
   for (const key of POP_KEYS) {
     const c = shownComposition(key);
+    const totals = [c.WW, c.DW, c.DD].join('/');
+    if (countViews.get(key) === totals) continue;
+    countViews.set(key, totals);
     habs[key].counts.innerHTML = GENOTYPES.map(
       (g) => `<span class="cnt ${g}">${genoSwatch(g)}<span class="cnt-l">${GENOTYPE_LABEL[g]}</span><b>${c[g]}</b></span>`,
     ).join('');
@@ -146,6 +145,9 @@ function barHtml(c: Composition | undefined): string {
 }
 
 function renderSummary(): void {
+  const key = [director.experiment.released, shownGeneration(), director.activity.kind === 'release', director.experiment.drive.history.length].join('/');
+  if (key === summaryKey) return;
+  summaryKey = key;
   const ex = director.experiment;
   const gen = shownGeneration();
   const carriers: Record<PopKey, number> = { mendel: 0, drive: 0 };
@@ -178,10 +180,7 @@ function renderSummary(): void {
 }
 
 function renderHeader(): void {
-  if (populationMode) {
-    renderPopulationHeader();
-    return;
-  }
+  if (studyMode) return renderStudyHeader();
   const ex = director.experiment;
   const a = director.activity;
   const gen = shownGeneration();
@@ -236,92 +235,75 @@ function renderAll(): void {
   renderSummary();
 }
 
-function renderPopulationHeader(): void {
-  if (!observation) return;
-  const obs = observation;
-  ui.genNum.textContent = String(Math.ceil(obs.tick / ROUND_TICKS));
-  ui.genSub.textContent = obs.finished ? '관찰 완료' : obs.running ? '관찰 중' : obs.tick ? '일시정지' : '시작 전';
-  ui.limit.disabled = obs.running || obs.tick > 0;
-  ui.release.textContent = '관찰 시작';
-  ui.release.disabled = obs.running || obs.tick > 0;
-  ui.release.classList.toggle('primary', !ui.release.disabled);
-  ui.step.textContent = '한 회차 관찰';
-  ui.step.disabled = ui.play.disabled = obs.finished;
+function renderStudyHeader(): void {
+  ui.genNum.textContent = String(study.generation);
+  ui.genSub.textContent = study.finished ? '관찰 종료' : study.playing ? '기록 재생 중' : '관찰 기록';
+  ui.step.disabled = ui.play.disabled = study.finished;
+  ui.step.textContent = '한 세대 관찰';
   ui.step.classList.remove('primary');
-  ui.play.classList.toggle('playing', obs.running);
-  $('.ico', ui.play).textContent = obs.running ? '❚❚' : '▶';
-  $('.lbl', ui.play).textContent = obs.running ? '일시정지' : '재생';
-  ui.play.setAttribute('aria-label', obs.running ? '일시정지' : '재생');
-  ui.speedBtns.forEach(b => b.classList.toggle('on', Number(b.dataset.speed) === director.speed));
+  ui.play.classList.toggle('playing', study.playing);
+  const label = study.playing ? '일시정지' : '재생';
+  $('.ico', ui.play).textContent = study.playing ? '❚❚' : '▶';
+  $('.lbl', ui.play).textContent = label;
+  ui.play.setAttribute('aria-label', label);
+  ui.speedBtns.forEach(b => b.classList.toggle('on', Number(b.dataset.speed) === study.speed));
 }
 
-function renderPopulationCounts(): void {
-  if (!observation) return;
-  const lines: string[] = [];
-  for (const key of POP_KEYS) {
-    const group = observation.groups[conditions[key]];
-    const total = group.living.size;
-    const label = CONDITION_LABEL[group.condition];
-    habs[key].counts.innerHTML = `<span class="cnt">생존 <b>${total}</b>마리</span>`;
-    habs[key].summary.innerHTML = `<div class="sum-head"><span class="sum-name">${label}</span><span class="sum-carrier"><b>${total}</b>마리</span></div>
-      <div class="bar-row">누적 출생 <b>${group.births}</b>마리</div>
-      <div class="bar-row">누적 사망 <b>${group.deaths}</b>마리</div>`;
-    lines.push(`${group.condition === 'usual' ? '기본' : '제한'}　${INITIAL_COUNT} + ${group.births} − ${group.deaths} = ${total}`);
-  }
-  ui.equations.textContent = lines.join('\n');
-  ui.diff.textContent = `${Math.abs(observation.groups.usual.living.size - observation.groups.limited.living.size)}마리`;
-}
-
-function renderPopulationPick(key: PopKey): void {
-  const h = habs[key];
-  const id = h.habitat.populationPick;
-  const m = id == null ? undefined : observation?.groups[conditions[key]].living.get(id);
-  h.inspector.hidden = !m;
-  if (!m) return;
-  h.inspector.innerHTML = `<div class="insp-head"><span>${m.id}번 ${m.sex === 'F' ? '암컷' : '수컷'}</span><button class="close" type="button" aria-label="닫기">×</button></div>
-    <div>${m.canReproduce ? '번식 기회 있음' : '번식 기회 제한'}</div>
-    <div>${m.mother === null ? '처음부터 있던 개체' : `어미 ${m.mother}번, 아비 ${m.father}번`}</div>`;
-  $('.close', h.inspector).onclick = () => {
-    h.habitat.populationPick = null;
-    renderPopulationPick(key);
-  };
+function renderStudy(): void {
+  renderStudyHeader();
+  const g = study.generation;
+  document.documentElement.style.setProperty('--figure-cursor', `${(366.6 - 327 + g * 10.19) / 2}%`);
+  POP_KEYS.forEach((key, index) => {
+    const cage = cages[index];
+    const latest = Math.min(g, cage.data.length - 1);
+    const row = cage.data[latest];
+    const h = habs[key];
+    const ended = g > latest;
+    const pct = row.carrier.toLocaleString('ko-KR', { maximumFractionDigits: 2 }) + '%';
+    const relative = row.eggs / cage.data[0].eggs * 100;
+    const eggLabel = relative.toLocaleString('ko-KR', { maximumFractionDigits: 1 }) + '%';
+    h.habitat.setStudy({ carrier: row.carrier, color: cage.color });
+    h.counts.innerHTML = `<span class="cnt">D 보유 <b>${pct}</b></span>`;
+    const note = row.eggs === 0 ? '새로운 알이 관찰되지 않았습니다.' :
+      row.carrier === 100 ? '관찰한 자손 모두가 드라이브를 보유했습니다.' : '';
+    $('.study-eggs', h.section).innerHTML = `<span>상대 산란량　${eggLabel}</span>` +
+      `<div class="bar"><span style="width:${relative}%;background:${cage.color}"></span></div>` +
+      (note ? `<small>${note}</small>` : '');
+    h.summary.innerHTML = `<div class="sum-head"><span class="sum-name">${cage.name}</span><b>${ended ? latest+'세대 관찰 종료' : latest+'세대'}</b></div>
+      <div class="study-summary">기준 산란량　${cage.data[0].eggs.toLocaleString('ko-KR')}개</div>
+      <div class="study-summary">이 세대 산란량　<b>${row.eggs.toLocaleString('ko-KR')}개</b></div>`;
+    $('.hab-rule.study-only', h.section).textContent = ended ? `${latest}세대 마지막 기록` : index ? '원논문 파란 관찰선' : '원논문 빨간 관찰선';
+  });
 }
 
 function showMode(): void {
-  $('#app').classList.toggle('observing-population', populationMode);
-  ui.mode.checked = populationMode;
-  ui.unit.textContent = populationMode ? '회차' : '세대';
-  ui.differenceLabel.textContent = populationMode ? '생존 수 차이' : '두 집단 차이';
+  $('#app').classList.toggle('observing-study', studyMode);
   ui.lmoCard.hidden = true;
-  if (populationMode && !observation) observation = new PopulationObservation(Number(ui.limit.value), seed);
   for (const key of POP_KEYS) {
     const h = habs[key];
-    h.habitat.setCommunity(populationMode ? observation!.groups[conditions[key]] : null);
-    $('canvas', h.section).setAttribute('aria-label', populationMode ? CONDITION_LABEL[conditions[key]] + '의 모기'
-      : (key === 'mendel' ? '멘델 유전' : '호밍 드라이브') + ' 집단의 모기');
-    if (populationMode) renderPopulationPick(key);
-    else renderInspector(key);
+    const name = key === 'mendel' ? '멘델 유전' : '호밍 드라이브';
+    $('canvas', h.section).setAttribute('aria-label', studyMode ?
+      (key === 'mendel' ? '케이지 1' : '케이지 2') + '의 드라이브 보유 비율 대표 그림' : name + ' 집단의 모기');
+    if (studyMode) h.inspector.hidden = true;
+    else { h.habitat.setStudy(null); renderInspector(key); }
   }
-  if (populationMode) {
-    renderPopulationCounts();
-    renderPopulationHeader();
-    ui.clock.textContent = `경과 ${(observation!.tick / TICKS_PER_UNIT).toFixed(1)}`;
-  } else {
-    renderAll();
-  }
+  if (studyMode) renderStudy();
+  else { countViews.clear(); summaryKey = ''; renderAll(); }
+  restartClock();
 }
 
 function playOrPause(): void {
-  if (!populationMode || !observation) return director.togglePlay();
-  if (observation.running) observation.running = false;
-  else observation.play();
-  renderPopulationHeader();
+  if (!studyMode) return director.togglePlay();
+  study.toggle();
+  renderStudyHeader();
+  restartClock();
 }
 
 function step(): void {
-  if (!populationMode || !observation) return director.step();
-  observation.play(true);
-  renderPopulationHeader();
+  if (!studyMode) return director.step();
+  study.step();
+  renderStudy();
+  restartClock();
 }
 
 // ---------- 확대 보기 (교배 사례, 가계) ----------
@@ -417,6 +399,7 @@ function onPick(key: PopKey, pick: HabitatPick | null): void {
 director.on((ev) => {
   switch (ev.type) {
     case 'reset':
+      summaryKey = '';
       for (const key of POP_KEYS) {
         habs[key].habitat.rebuild();
         habs[key].insp = null;
@@ -494,32 +477,30 @@ director.on((ev) => {
 
 // ---------- 조작 ----------
 ui.mode.addEventListener('change', () => {
-  if (observation) observation.running = false;
-  director.pause();
-  populationMode = ui.mode.checked;
+  // Keep the inactive timeline, including an unfinished release or held example, intact.
+  studyMode = ui.mode.value === 'study';
+  study.playing = false;
   showMode();
 });
-ui.limit.addEventListener('change', () => {
-  if (!populationMode || ui.limit.disabled) return;
-  observation = null;
-  showMode();
-});
-ui.release.addEventListener('click', () => {
-  if (populationMode) playOrPause();
-  else director.startRelease();
-});
+ui.release.addEventListener('click', () => director.startRelease());
 ui.step.addEventListener('click', step);
 ui.play.addEventListener('click', playOrPause);
 ui.reset.addEventListener('click', () => {
-  if (populationMode) {
-    observation = null;
-    showMode();
+  if (studyMode) {
+    study.reset();
+    ui.lmoCard.hidden = true;
+    renderStudy();
+    restartClock();
     return;
   }
   director.reset({ initialE: Number(ui.eSlider.value) });
   ui.lmoCard.hidden = true;
 });
-ui.speedBtns.forEach((b) => b.addEventListener('click', () => director.setSpeed(Number(b.dataset.speed) as Speed)));
+ui.speedBtns.forEach(b => b.addEventListener('click', () => {
+  const speed = Number(b.dataset.speed) as Speed;
+  if (studyMode) { study.speed = speed; renderStudyHeader(); }
+  else director.setSpeed(speed);
+}));
 
 ui.eSlider.addEventListener('input', () => {
   const e = Number(ui.eSlider.value);
@@ -532,9 +513,10 @@ ui.lmoBtn.addEventListener('click', () => {
   const show = ui.lmoCard.hidden;
   ui.lmoCard.hidden = !show;
   // 진행 중인 세대 교체는 마무리하고 그 화면을 유지한다
-  if (show && populationMode && observation) {
-    observation.running = false;
-    renderPopulationHeader();
+  if (show && studyMode) {
+    study.playing = false;
+    renderStudyHeader();
+    restartClock();
   } else if (show) director.finishCurrentAndStop();
 });
 $('.close', ui.lmoCard).addEventListener('click', () => (ui.lmoCard.hidden = true));
@@ -542,10 +524,16 @@ ui.lmoHintsBtn.addEventListener('click', () => {
   ui.lmoHints.hidden = !ui.lmoHints.hidden;
 });
 
+let lastTableRecord: GenerationRecord | undefined;
+let tableReady = false;
 function renderHistoryTable(): void {
   const ex = director.experiment;
   const m = ex.mendel.history;
   const d = ex.drive.history;
+  const record = d.at(-1);
+  if (tableReady && lastTableRecord === record) return;
+  tableReady = true;
+  lastTableRecord = record;
   const head = `<thead><tr><th rowspan="2">세대</th><th colspan="5">멘델 유전 (e = 0)</th><th colspan="6">호밍 드라이브</th></tr>
     <tr><th>W/W</th><th>D/W</th><th>D/D</th><th>D 보유</th><th>D 빈도</th><th>e</th><th>W/W</th><th>D/W</th><th>D/D</th><th>D 보유</th><th>D 빈도</th></tr></thead>`;
   const rows = m
@@ -561,14 +549,19 @@ function renderHistoryTable(): void {
 }
 
 ui.modelBtn.addEventListener('click', () => {
-  if (populationMode && observation) {
-    observation.running = false;
-    renderPopulationHeader();
+  if (studyMode) {
+    study.playing = false;
+    renderStudyHeader();
+    restartClock();
   } else director.pause();
   renderHistoryTable();
   ui.dialog.showModal();
 });
 $('.close', ui.dialog).addEventListener('click', () => ui.dialog.close());
+$('#btn-figure').addEventListener('click', () => {
+  ui.modelBtn.click();
+  $('#original-figure').scrollIntoView({ block: 'start' });
+});
 ui.dialog.addEventListener('click', (ev) => {
   if (ev.target === ui.dialog) ui.dialog.close();
 });
@@ -579,7 +572,7 @@ document.addEventListener('keydown', (ev) => {
   if (t instanceof HTMLInputElement || t instanceof HTMLSelectElement) return;
   if (ev.code === 'Space') {
     ev.preventDefault();
-    if (!populationMode && !director.experiment.released) director.startRelease();
+    if (!studyMode && !director.experiment.released) director.startRelease();
     else playOrPause();
   } else if (ev.code === 'ArrowRight') {
     ev.preventDefault();
@@ -611,47 +604,64 @@ new ResizeObserver(() => {
   if (Math.abs(fs - legendFs) > 0.5) {
     legendFs = fs;
     renderLegend();
-    if (!populationMode) renderSummary();
+    if (!studyMode) renderSummary();
   }
 }).observe(document.documentElement);
 
 // ---------- 애니메이션 루프 ----------
 function frame(dt: number, time: number): void {
-  if (!populationMode || !observation) {
-    director.tick(dt);
-    for (const key of POP_KEYS) habs[key].habitat.frame(dt, time);
+  if (studyMode) {
+    if (study.tick(dt)) renderStudy();
     return;
   }
-  const obs = observation;
-  const before = obs.tick;
-  const running = obs.running;
-  const changes = obs.groups.usual.births + obs.groups.usual.deaths + obs.groups.limited.births + obs.groups.limited.deaths;
-  obs.advance(dt, director.speed);
-  const elapsed = (obs.tick - before) / TICKS_PER_UNIT;
-  for (const key of POP_KEYS) habs[key].habitat.frameCommunity(obs.tick, elapsed);
-  if (before !== obs.tick) ui.clock.textContent = `경과 ${(obs.tick / TICKS_PER_UNIT).toFixed(1)}`;
-  if (running !== obs.running || Math.ceil(before / ROUND_TICKS) !== Math.ceil(obs.tick / ROUND_TICKS)) renderPopulationHeader();
-  if (changes !== obs.groups.usual.births + obs.groups.usual.deaths + obs.groups.limited.births + obs.groups.limited.deaths) renderPopulationCounts();
+  director.tick(dt);
+  for (const key of POP_KEYS) habs[key].habitat.frame(dt, time);
 }
 
-let last = performance.now();
-function loop(now: number): void {
-  const dt = Math.min(0.25, Math.max(0, (now - last) / 1000));
-  last = now;
-  frame(dt, now / 1000);
-  requestAnimationFrame(loop);
+let frameId: number | null = null;
+let last: number | null = null;
+let motionTime = performance.now() / 1000;
+function schedule(): void {
+  if (frameId === null && !document.hidden && (!studyMode || study.playing))
+    frameId = requestAnimationFrame(loop);
 }
+function restartClock(): void {
+  if (frameId !== null) cancelAnimationFrame(frameId);
+  frameId = last = null;
+  schedule();
+}
+function loop(now: number): void {
+  frameId = null;
+  const dt = last === null ? 0 : Math.min(0.25, Math.max(0, (now - last) / 1000));
+  last = now;
+  if (!studyMode) motionTime += dt;
+  frame(dt, motionTime);
+  schedule();
+}
+document.addEventListener('visibilitychange', restartClock);
+
+function watchDpr(): void {
+  matchMedia(`(resolution: ${devicePixelRatio}dppx)`).addEventListener('change', () => {
+    for (const key of POP_KEYS) habs[key].habitat.resize();
+    renderLegend();
+    watchDpr();
+  }, { once: true });
+}
+watchDpr();
+document.querySelectorAll<HTMLImageElement>('[data-panel]').forEach(img => {
+  img.src = img.dataset.panel === 'a' ? panelA : panelB;
+});
 
 ui.eSlider.value = String(director.experiment.eFor('drive'));
 renderE();
 renderLegend();
 renderAll();
-requestAnimationFrame(loop);
+schedule();
 
 // 개발 및 검증용
 declare global {
   interface Window {
-    __sim: { readonly population: PopulationObservation | null; director: Director; stages: typeof STAGES; advance: (seconds: number) => string };
+    __sim: { readonly study: StudyPlayback | null; director: Director; stages: typeof STAGES; advance: (seconds: number) => string };
   }
 }
 /** 검증용: 화면 프레임 속도와 무관하게 지정한 시간만큼 진행한다 */
@@ -663,4 +673,4 @@ function advanceFor(seconds: number): string {
   const a = director.activity;
   return JSON.stringify({ activity: a.kind, stage: a.kind === 'generation' ? a.stage : null, generation: director.experiment.generation, held: director.held });
 }
-window.__sim = { get population() { return populationMode ? observation : null; }, director, stages: STAGES, advance: advanceFor };
+window.__sim = { get study() { return studyMode ? study : null; }, director, stages: STAGES, advance: advanceFor };

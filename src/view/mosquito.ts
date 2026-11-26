@@ -19,16 +19,24 @@ export interface MosquitoDraw {
   wing: number;
   alpha?: number;
   shadow?: boolean;
+  /** 단색 연구 아이콘에는 대립유전자 수 표식을 그리지 않는다. */
+  ink?: { body: string; dark: string };
+
 }
 
 /**
  * 위에서 내려다본 모기 실루엣. 몸 전체 색이 유전자형을 나타내고,
  * 배 위의 흰 점 개수가 D 대립유전자 수(0, 1, 2)를 나타낸다.
  */
-export function drawMosquito(ctx: CanvasRenderingContext2D, o: MosquitoDraw): void {
+type DrawingContext = Pick<CanvasRenderingContext2D,
+  'save' | 'restore' | 'translate' | 'rotate' | 'globalAlpha' | 'lineCap' | 'lineJoin' |
+  'fillStyle' | 'strokeStyle' | 'lineWidth' | 'beginPath' | 'ellipse' | 'arc' |
+  'moveTo' | 'lineTo' | 'quadraticCurveTo' | 'fill' | 'stroke'>;
+
+export function drawMosquito(ctx: DrawingContext, o: MosquitoDraw): void {
   const L = o.size;
   if (L < 2) return;
-  const c = GENO_COLOR[o.genotype];
+  const c = o.ink ?? GENO_COLOR[o.genotype];
   ctx.save();
   ctx.globalAlpha = o.alpha ?? 1;
 
@@ -137,7 +145,7 @@ export function drawMosquito(ctx: CanvasRenderingContext2D, o: MosquitoDraw): vo
 
   // D 표식: 흰 점 개수 = D 대립유전자 수
   const dots = o.genotype === 'DD' ? [-0.13, -0.31] : o.genotype === 'DW' ? [-0.22] : [];
-  if (dots.length) {
+  if (!o.ink && dots.length) {
     ctx.fillStyle = '#ffffff';
     ctx.strokeStyle = c.dark;
     ctx.lineWidth = Math.max(0.8, L * 0.018);
@@ -174,4 +182,162 @@ export function mosquitoIcon(genotype: Genotype, sex: Sex, cssWidth: number, css
     shadow: false,
   });
   return cv;
+}
+
+
+
+interface InkLayer {
+  path: Path2D;
+  stroke: boolean;
+  color: string;
+  width: number;
+  alpha: number;
+}
+
+/** Compile the same artwork to native vector paths for large display sizes. */
+class OutlineRecorder {
+  globalAlpha = 1;
+  lineWidth = 1;
+  lineCap: CanvasLineCap = 'round';
+  lineJoin: CanvasLineJoin = 'round';
+  fillStyle = '';
+  strokeStyle = '';
+  readonly layers: InkLayer[] = [];
+  private matrix = new DOMMatrix();
+  private stack: DOMMatrix[] = [];
+  private path = new Path2D();
+  private placed: Path2D | null = null;
+
+  // In drawMosquito the nested save/restore pairs isolate wing transforms.
+  save(): void { this.stack.push(DOMMatrix.fromMatrix(this.matrix)); }
+  restore(): void { this.matrix = this.stack.pop()!; }
+  translate(x: number, y: number): void { this.matrix.translateSelf(x, y); }
+  rotate(rad: number): void { this.matrix.rotateSelf(rad * 180 / Math.PI); }
+  beginPath(): void { this.path = new Path2D(); this.placed = null; }
+  moveTo(x: number, y: number): void { this.path.moveTo(x, y); }
+  lineTo(x: number, y: number): void { this.path.lineTo(x, y); }
+  quadraticCurveTo(cx: number, cy: number, x: number, y: number): void {
+    this.path.quadraticCurveTo(cx, cy, x, y);
+  }
+  ellipse(...args: Parameters<Path2D['ellipse']>): void { this.path.ellipse(...args); }
+  arc(...args: Parameters<Path2D['arc']>): void { this.path.arc(...args); }
+  fill(): void { this.record(false); }
+  stroke(): void { this.record(true); }
+
+  private record(stroke: boolean): void {
+    if (!this.placed) {
+      this.placed = new Path2D();
+      this.placed.addPath(this.path, this.matrix);
+    }
+    this.layers.push({ path: this.placed, stroke, color: stroke ? this.strokeStyle : this.fillStyle,
+      width: this.lineWidth, alpha: this.globalAlpha });
+  }
+}
+
+/** Original CSS-space drawing rasterized above the habitat's backing resolution. */
+export class MosquitoSprites {
+  private readonly sheets = new Map<string, HTMLCanvasElement | ImageBitmap>();
+  private readonly side: number;
+  private readonly pixels: number;
+  private readonly columns = 5;
+  private readonly outlines = new Map<string, InkLayer[]>();
+  private static readonly wingSteps = 16;
+
+  constructor(readonly size: number, readonly dpr: number) {
+    this.side = size * 1.24 + 4;
+    this.pixels = Math.ceil(this.side * dpr * 1.5);
+  }
+
+  private sheet(genotype: Genotype, sex: Sex): HTMLCanvasElement | ImageBitmap {
+    const key = genotype + sex;
+    const existing = this.sheets.get(key);
+    if (existing) return existing;
+    const width = this.columns * this.pixels;
+    const height = Math.ceil((MosquitoSprites.wingSteps + 1) / this.columns) * this.pixels;
+    const tile = typeof OffscreenCanvas === 'function' && 'transferToImageBitmap' in OffscreenCanvas.prototype
+      ? new OffscreenCanvas(width, height) : document.createElement('canvas');
+    tile.width = width;
+    tile.height = height;
+    const ctx = tile.getContext('2d')!;
+    const factor = this.pixels / this.side;
+    ctx.scale(factor, factor);
+    for (let i = 0; i <= MosquitoSprites.wingSteps; i++) {
+      drawMosquito(ctx, {
+        x: (i % this.columns + 0.5) * this.side,
+        y: (Math.floor(i / this.columns) + 0.5) * this.side,
+        size: this.size, angle: 0, genotype, sex,
+        wing: Math.asin(i * 2 / MosquitoSprites.wingSteps - 1), shadow: false,
+      });
+    }
+    const image = 'transferToImageBitmap' in tile ? tile.transferToImageBitmap() : tile;
+    this.sheets.set(key, image);
+    return image;
+  }
+
+  private outline(genotype: Genotype, sex: Sex, index: number): InkLayer[] {
+    const key = genotype + sex + index;
+    let layers = this.outlines.get(key);
+    if (!layers) {
+      const recorder = new OutlineRecorder();
+      drawMosquito(recorder, { x: 0, y: 0, size: this.size, angle: 0, genotype, sex,
+        wing: Math.asin(index * 2 / MosquitoSprites.wingSteps - 1), shadow: false });
+      this.outlines.set(key, layers = recorder.layers);
+    }
+    return layers;
+  }
+
+  draw(ctx: CanvasRenderingContext2D, x: number, y: number, angle: number, scale: number,
+       genotype: Genotype, sex: Sex, wing: number, alpha: number): void {
+    if (alpha <= 0 || scale * this.size < 2) return;
+    // The original artwork has minimum widths for legs and genotype dots.
+    // Raster scaling would thin these details on newly emerging offspring.
+    if (scale < 0.78) {
+      drawMosquito(ctx, { x, y, size: this.size * scale, angle, genotype, sex, wing, alpha });
+      return;
+    }
+    const side = this.side * scale;
+    const half = side / 2;
+    const index = Math.round((Math.sin(wing) + 1) * MosquitoSprites.wingSteps / 2);
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    const size = this.size * scale;
+    ctx.fillStyle = 'rgba(40, 60, 40, 0.10)';
+    ctx.beginPath();
+    ctx.ellipse(x + size * 0.06, y + size * 0.32, size * 0.32, size * 0.11, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.translate(x, y);
+    ctx.rotate(angle);
+    // At 4K, rotating mostly transparent bitmap tiles costs more than drawing
+    // the sparse strokes. Reuse those strokes at full device resolution.
+    if (this.size * this.dpr >= 96) {
+      ctx.scale(scale, scale);
+      ctx.lineJoin = ctx.lineCap = 'round';
+      for (const layer of this.outline(genotype, sex, index)) {
+        ctx.globalAlpha = alpha * layer.alpha;
+        if (layer.stroke) {
+          ctx.strokeStyle = layer.color;
+          ctx.lineWidth = layer.width;
+          ctx.stroke(layer.path);
+        } else {
+          ctx.fillStyle = layer.color;
+          ctx.fill(layer.path);
+        }
+      }
+    } else {
+      ctx.drawImage(this.sheet(genotype, sex), index % this.columns * this.pixels,
+        Math.floor(index / this.columns) * this.pixels, this.pixels, this.pixels, -half, -half, side, side);
+    }
+    ctx.restore();
+  }
+}
+
+// Both habitats normally share one size. Retain at most the two current size classes.
+const recentAtlases: MosquitoSprites[] = [];
+export function spritesFor(size: number, dpr: number): MosquitoSprites {
+  const existing = recentAtlases.find(atlas => atlas.size === size && atlas.dpr === dpr);
+  if (existing) return existing;
+  const atlas = new MosquitoSprites(size, dpr);
+  if (recentAtlases.length === 2) recentAtlases.shift();
+  recentAtlases.push(atlas);
+  return atlas;
 }

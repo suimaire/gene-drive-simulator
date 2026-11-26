@@ -10,8 +10,8 @@
     <div id="app">
       <header class="topbar">
         <div class="title-block">
-          <h1><span class="genetics-only">유전자 드라이브는 어떻게 퍼질까?</span><span class="population-only">출생이 사망을 보충할까?</span></h1>
-          <span class="tag">가상 개체군 모형</span>
+          <h1><span class="genetics-only">유전자 드라이브는 어떻게 퍼질까?</span><span class="study-only">두 케이지에서 산란량은 어떻게 달라졌을까?</span></h1>
+          <span class="tag"><span class="genetics-only">가상 개체군 모형</span><span class="study-only">Kyrou 등 (2018), Figure 5</span></span>
         </div>
 
         <div class="gen-block" aria-live="polite">
@@ -35,7 +35,7 @@
         </div>
 
         <div class="controls">
-          <button id="btn-release" class="btn primary" type="button">가상 방사</button>
+          <button id="btn-release" class="btn primary genetics-only" type="button">가상 방사</button>
           <button id="btn-step" class="btn" type="button">한 세대 관찰</button>
           <button id="btn-play" class="btn" type="button"><span class="ico" aria-hidden="true">▶</span><span class="lbl">재생</span></button>
           <div class="speed" role="group" aria-label="재생 속도">
@@ -53,16 +53,13 @@
           <li data-stage="2"><span>3</span>자손 등장</li>
           <li data-stage="3"><span>4</span>세대 교체</li>
         </ol>
-        <span id="life-note" class="population-only">두 집단의 초기 크기와 수명 조건은 같습니다.</span>
-        <div class="life-controls" role="group" aria-label="관찰 모드 설정">
-          <label><input type="checkbox" id="life-toggle" /> 개체수 변화</label>
-          <label class="population-only">가상 수명
-            <select id="life-limit" aria-label="최대 가상 수명">
-              <option value="10">10</option><option value="20" selected>20</option><option value="40">40</option>
-            </select>
-          </label>
-          <span id="life-clock" class="population-only">경과 0.0</span>
-        </div>
+        <span id="study-note" class="study-only">같은 연구에서 따로 관찰한 두 케이지</span>
+        <label class="mode-control">관찰 모드
+          <select id="mode-select">
+            <option value="genetics">유전자형 변화 관찰</option>
+            <option value="study">실제 연구 결과 관찰</option>
+          </select>
+        </label>
         <div class="legend genetics-only" id="legend"></div>
       </div>
 
@@ -71,28 +68,30 @@
           <canvas aria-label="멘델 유전 집단의 모기"></canvas>
           <div class="hab-label">
             <div class="hab-name genetics-only">멘델 유전</div>
-            <div class="hab-name population-only">기본 번식 조건</div>
-            <div class="hab-rule population-only">모든 개체에 번식 기회</div>
+            <div class="hab-name study-only">케이지 1</div>
+            <div class="hab-rule study-only">원논문 빨간 관찰선</div>
             <div class="hab-rule genetics-only">e = 0 고정, D 전달 <b>50%</b></div>
           </div>
           <div class="hab-counts"></div>
+          <div class="study-eggs study-only"></div>
           <div class="inspector" hidden></div>
         </section>
         <section class="habitat drive" data-key="drive">
           <canvas aria-label="호밍 드라이브 집단의 모기"></canvas>
           <div class="hab-label">
             <div class="hab-name genetics-only">호밍 드라이브</div>
-            <div class="hab-name population-only">번식 참여 제한</div>
-            <div class="hab-rule population-only">일부 개체에 번식 기회</div>
+            <div class="hab-name study-only">케이지 2</div>
+            <div class="hab-rule study-only">원논문 파란 관찰선</div>
             <div class="hab-rule genetics-only">e = <b class="drive-e">0.8</b>, D 전달 <b class="drive-p">90%</b></div>
           </div>
           <div class="hab-counts"></div>
+          <div class="study-eggs study-only"></div>
           <div class="inspector" hidden></div>
         </section>
 
         <div class="lmo-card" id="lmo-card" hidden>
           <button class="close" type="button" aria-label="질문 닫기">×</button>
-          <strong class="population-only">유전자형 관찰과 연결해서 생각해 보기</strong>
+          <strong class="study-only">밀폐 케이지의 관찰을 자연환경에 적용하려면 어떤 증거가 더 필요할까요?</strong>
           <p class="lmo-q">
             가상 집단에서 유전정보의 전달 방식만 바꿨는데도 여러 세대 후 구성비가 달라졌습니다.
             이러한 LMO를 실제 환경에 방출하려면 무엇을 추가로 확인해야 할까요?
@@ -115,15 +114,16 @@
             <span class="chart-legend"><i class="sw mendel"></i>멘델 <i class="sw drive"></i>호밍</span>
           </div>
           <div class="chart-host genetics-only" id="chart"></div>
-          <div class="population-only population-balance">
-            <strong>출생이 사망을 보충했나요?</strong>
-            <span>현재 생존 수 = 처음 개체수 + 누적 출생 − 누적 사망</span>
-            <span id="population-equations"></span>
-          </div>
+          <div class="study-only study-overview"><div class="study-key">
+            <strong>모기 그림은 보유 비율을 나타냅니다.</strong>
+            <span>빨강과 파랑은 드라이브 보유, 회색은 미보유입니다. 그림 하나는 5%입니다.</span>
+            <span>막대는 0세대 대비 산란량입니다. 원그림의 검정과 회색 선은 논문의 계산 결과입니다.</span>
+            <button type="button" id="btn-figure" class="btn small quiet">원그림 확대</button>
+          </div><div class="study-figure"><img data-panel="b" alt="Figure 5b 상대 산란량, 세로선은 선택한 세대" /><i></i></div></div>
         </div>
         <div class="sum-pop drive" id="sum-drive"></div>
         <div class="sum-side">
-          <div class="diff">
+          <div class="diff genetics-only">
             <span class="diff-caption">두 집단 차이</span>
             <span class="diff-value" id="diff-value">0%p</span>
           </div>
@@ -162,12 +162,17 @@
           </ul>
         </section>
         <section>
-          <h3>개체수 변화 관찰의 가정</h3>
-          <p>두 집단은 나이가 다양한 80마리에서 출발합니다. 기본 조건에서는 모든 개체에 번식 기회를 주고, 제한 조건에서는 개체마다 35% 확률로 기회를 부여합니다. 이 조건은 자손에게 유전되지 않습니다. 개체별 수명은 두 집단에서 같은 규칙을 따릅니다.</p>
-          <p>4 가상 시간마다 살아 있는 암수 중 번식 가능한 개체가 짝을 이룹니다. 새끼는 태어난 뒤 4 가상 시간이 지나야 짝을 이룰 수 있습니다. 한 쌍에서 한 자손이 태어날 수 있고, 공간이 가득 차면(120마리) 출생을 멈춥니다. 부모도 자신의 수명이 다할 때까지 살아 있습니다. 모기를 누르면 번식 기회와 부모 번호를 확인할 수 있습니다.</p>
+          <h3>실제 연구 결과 관찰</h3>
+          <p>Figure 5a의 두 색 선은 세대별 드라이브 보유 개체 비율입니다. 연구진은 자손의 형광 표지로 보유 여부를 확인했습니다. 빨강은 케이지 1, 파랑은 케이지 2입니다. 검정과 회색 선은 논문의 계산 결과입니다. Figure 5b는 각 케이지의 0세대를 기준으로 한 상대 산란량입니다.</p>
+          <p>세대별 보유율과 산란한 알 개수는 원논문 <a href="https://pmc-oa-opendata.s3.amazonaws.com/PMC6871539.1/41587_2018_BFnbt4245_MOESM38_ESM.pdf#page=9" target="_blank" rel="noopener noreferrer">보충표 S6 (9쪽)</a>의 관찰값입니다. 막대는 각 케이지의 해당 세대 알 개수를 0세대 알 개수로 나눈 값입니다. 인쇄된 Figure 5b의 선과 보충표의 비율이 조금 다른 지점은 보충표를 기준으로 표시했습니다.</p>
+          <figure id="original-figure">
+            <div class="study-figure"><img data-panel="a" alt="Figure 5a 드라이브 보유 개체 비율" /><i></i></div>
+            <div class="study-figure"><img data-panel="b" alt="Figure 5b 상대 산란량" /><i></i></div>
+            <figcaption>Kyrou 등 (2018), Figure 5a와 5b. 원그림을 잘라 선택한 세대를 세로선으로 표시했습니다. 빨강과 파랑은 관찰 기록이고 검정과 회색은 논문의 모형입니다. © 2018 저자, <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener noreferrer">CC BY 4.0</a>.</figcaption>
+          </figure>
           <h3>연구 사례에서 생존과 번식 구별하기</h3>
           <p>Kyrou 등(2018)의 케이지 실험에서 <i>doublesex</i>의 암컷 특이적 기능이 손상된 동형접합 암컷(수업 표기 D/D)은 성체가 되었지만 불임이었습니다. 같은 동형접합 수컷은 번식할 수 있었습니다. 연구진은 케이지에서 번식이 억제되어 새 세대가 유지되지 못하는 현상을 관찰했습니다.</p>
-          <p>화면의 개체수 모형은 유전자형이나 호밍 효율을 입력받지 않습니다. 번식 기회와 가상 수명은 수업에서 두 조건을 비교하기 위한 가정입니다. 실제 연구의 개체수 변화나 야외 방출 결과를 예측할 수 없습니다.</p>
+          <p>대표 그림은 보유자 내부의 유전자형이나 성비, 성체 개체수를 나타내지 않습니다. 알을 관찰하지 못한 세대로 성체의 사망 시점은 알 수 없습니다. 이 기록은 밀폐 케이지의 관찰 범위에 한정됩니다.</p>
           <h3>유전자형 관찰의 범위</h3>
           <ul>
             <li>불임이나 적합도 비용, 저항성 대립유전자, 공간 이동, 실제 환경 조건은 포함하지 않았습니다.</li>

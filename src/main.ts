@@ -34,6 +34,10 @@ const ui = {
   step: $<HTMLButtonElement>('#btn-step'),
   play: $<HTMLButtonElement>('#btn-play'),
   reset: $<HTMLButtonElement>('#btn-reset'),
+  lifeToggle: $<HTMLInputElement>('#life-toggle'),
+  lifeLimit: $<HTMLSelectElement>('#life-limit'),
+  lifeClock: $('#life-clock'),
+  lifeNote: $('#life-note'),
   speedBtns: [...document.querySelectorAll<HTMLButtonElement>('.speed button')],
   stages: [...document.querySelectorAll<HTMLLIElement>('#stages li')],
   legend: $('#legend'),
@@ -88,21 +92,15 @@ const chart = new CarrierChart($('#chart'), 10);
 
 // ---------- 표시할 세대 ----------
 /** 세대 번호와 수치는 '세대 교체' 단계에 들어설 때 바뀐다. */
-function shownGeneration(): number {
-  const a = director.activity;
-  const g = director.experiment.generation;
-  if (a.kind === 'generation' && a.stage < 3) return g - 1;
-  return g;
-}
-
 function shownHistory(key: PopKey): GenerationRecord[] {
   const pop = director.experiment.pop(key);
-  return pop.history.slice(0, shownGeneration() + 1);
+  return pop.history.slice(0, director.shownGeneration + 1);
 }
 
 function shownComposition(key: PopKey): Composition {
   const ex = director.experiment;
   const a = director.activity;
+  if (a.kind === 'lifespan') return a.cohorts[key].composition;
   if (!ex.released || a.kind === 'release') {
     // 방사 전(또는 방사 중)에는 기존 집단만
     return summarize(ex.pop(key).current.filter((m) => !m.released));
@@ -121,7 +119,7 @@ function renderCounts(): void {
     const c = shownComposition(key);
     habs[key].counts.innerHTML = GENOTYPES.map(
       (g) => `<span class="cnt ${g}">${genoSwatch(g)}<span class="cnt-l">${GENOTYPE_LABEL[g]}</span><b>${c[g]}</b></span>`,
-    ).join('');
+    ).join('') + (director.activity.kind === 'lifespan' ? `<span class="cnt life-total">생존 <b>${c.total}</b>마리</span>` : '');
   }
 }
 
@@ -136,28 +134,36 @@ function barHtml(c: Composition | undefined): string {
 
 function renderSummary(): void {
   const ex = director.experiment;
-  const gen = shownGeneration();
-  const carriers: Record<PopKey, number> = { mendel: 0, drive: 0 };
+  const gen = director.shownGeneration;
+  const observing = director.activity.kind === 'lifespan';
+  const carriers: Record<PopKey, number | null> = { mendel: 0, drive: 0 };
   for (const key of POP_KEYS) {
     const pop = ex.pop(key);
     const now = shownComposition(key);
     const releasing = director.activity.kind === 'release';
     const first = ex.released && !releasing ? pop.initial?.composition : undefined;
-    carriers[key] = now.carrierFraction;
+    carriers[key] = now.total ? now.carrierFraction : null;
     const name = key === 'mendel' ? '멘델 유전' : '호밍 드라이브';
-    const nowLabel = !ex.released ? '방사 전' : releasing ? '방사 중' : `지금 ${gen}세대`;
+    const nowLabel = observing ? '현재 생존' : !ex.released ? '방사 전' : releasing ? '방사 중' : `지금 ${gen}세대`;
     habs[key].summary.innerHTML = `
       <div class="sum-head">
         <span class="sum-name">${name}</span>
-        <span class="sum-carrier"><span class="sum-cap">D 보유</span><b>${now.carriers}</b><span class="sum-of">/ ${now.total}</span><em>${pct(now.carrierFraction)}</em></span>
+        <span class="sum-carrier"><span class="sum-cap">D 보유</span><b>${now.carriers}</b><span class="sum-of">/ ${now.total}</span><em>${now.total ? pct(now.carrierFraction) : '계산 불가'}</em></span>
       </div>
       <div class="bar-row"><span class="bar-label">처음</span>${barHtml(first)}</div>
       <div class="bar-row now"><span class="bar-label">${nowLabel}</span>${barHtml(now)}</div>`;
   }
-  const d = Math.round((carriers.drive - carriers.mendel) * 100);
-  ui.diff.textContent = ex.released ? `${d > 0 ? '+' : d < 0 ? '−' : ''}${Math.abs(d)}%p` : '0%p';
+  if (carriers.drive === null || carriers.mendel === null) {
+    ui.diff.textContent = '계산 불가';
+  } else {
+    const d = Math.round((carriers.drive - carriers.mendel) * 100);
+    ui.diff.textContent = ex.released ? `${d > 0 ? '+' : d < 0 ? '−' : ''}${Math.abs(d)}%p` : '0%p';
+  }
+}
+
+function renderChart(): void {
   chart.update(
-    ex.released
+    director.experiment.released
       ? [
           { key: 'mendel', color: '#56688a', history: shownHistory('mendel') },
           { key: 'drive', color: '#e0600f', history: shownHistory('drive'), markE: true },
@@ -169,10 +175,24 @@ function renderSummary(): void {
 function renderHeader(): void {
   const ex = director.experiment;
   const a = director.activity;
-  const gen = shownGeneration();
+  const gen = director.shownGeneration;
+  const observing = a.kind === 'lifespan';
+  ui.lifeToggle.checked = observing && a.enabled;
+  ui.lifeToggle.disabled = a.kind === 'release';
+  ui.lifeLimit.disabled = observing;
+  ui.lifeNote.hidden = ui.lifeClock.hidden = !observing;
+  $('#stages').hidden = observing;
+  ui.eSlider.disabled = observing;
+  if (observing) {
+    ui.lifeClock.textContent = `경과 ${a.elapsed.toFixed(1)}`;
+    ui.lifeNote.textContent = a.elapsed >= a.endTime ? '관찰 완료. 자손 생성 없음. 유전 관찰은 ‘처음으로’'
+      : !a.enabled ? '관찰 중지. 자손 생성 없음. 유전 관찰은 ‘처음으로’'
+      : '현재 세대만 관찰합니다. 자손 생성 없음';
+  }
   ui.genNum.textContent = String(gen);
   let sub = '';
-  if (!ex.released) sub = '방사 전';
+  if (observing) sub = '수명 관찰';
+  else if (!ex.released) sub = '방사 전';
   else if (a.kind === 'release') sub = '방사 중';
   else if (a.kind === 'generation' && a.stage < 3) sub = `${ex.generation}세대 만드는 중`;
   else if (!ex.canAdvance() && a.kind === 'idle') sub = '마지막 세대';
@@ -192,12 +212,12 @@ function renderHeader(): void {
   ui.release.textContent = released ? '방사 완료' : '가상 방사';
   ui.release.classList.toggle('primary', !released);
 
-  const canStep = released && a.kind !== 'release' && (a.kind === 'generation' || ex.canAdvance());
+  const canStep = !observing && released && a.kind !== 'release' && (a.kind === 'generation' || ex.canAdvance());
   ui.step.disabled = !canStep;
   ui.step.textContent = director.held ? '다음 단계' : '한 세대 관찰';
   ui.step.classList.toggle('primary', canStep && (director.held || (gen === 0 && a.kind === 'idle')));
 
-  const canPlay = released && a.kind !== 'release' && (a.kind === 'generation' || ex.canAdvance());
+  const canPlay = observing ? a.enabled && a.elapsed < a.endTime : canStep;
   ui.play.disabled = !canPlay;
   ui.play.classList.toggle('playing', director.playing);
   $('.ico', ui.play).textContent = director.playing ? '❚❚' : '▶';
@@ -219,6 +239,7 @@ function renderAll(): void {
   renderHeader();
   renderCounts();
   renderSummary();
+  renderChart();
 }
 
 // ---------- 확대 보기 (교배 사례, 가계) ----------
@@ -313,7 +334,22 @@ function onPick(key: PopKey, pick: HabitatPick | null): void {
 // ---------- 타임라인 이벤트 ----------
 director.on((ev) => {
   switch (ev.type) {
+    case 'lifespanStart':
+      for (const key of POP_KEYS) {
+        habs[key].habitat.onLifespanStart(ev.showingParents);
+        habs[key].insp = null;
+        renderInspector(key);
+      }
+      ui.eHint.textContent = '';
+      renderAll();
+      break;
+    case 'survivorsChanged':
+      for (const key of POP_KEYS) habs[key].habitat.removeExpired();
+      renderCounts();
+      renderSummary();
+      break;
     case 'reset':
+      ui.lifeLimit.value = '20';
       for (const key of POP_KEYS) {
         habs[key].habitat.rebuild();
         habs[key].insp = null;
@@ -356,6 +392,7 @@ director.on((ev) => {
       if (ev.stage === 3) {
         renderCounts();
         renderSummary();
+        renderChart();
       }
       renderHeader();
       break;
@@ -393,6 +430,7 @@ director.on((ev) => {
 ui.release.addEventListener('click', () => director.startRelease());
 ui.step.addEventListener('click', () => director.step());
 ui.play.addEventListener('click', () => director.togglePlay());
+ui.lifeToggle.addEventListener('change', () => director.setLifespanEnabled(ui.lifeToggle.checked, Number(ui.lifeLimit.value)));
 ui.reset.addEventListener('click', () => {
   director.reset({ initialE: Number(ui.eSlider.value) });
   ui.lmoCard.hidden = true;
@@ -419,8 +457,9 @@ ui.lmoHintsBtn.addEventListener('click', () => {
 
 function renderHistoryTable(): void {
   const ex = director.experiment;
-  const m = ex.mendel.history;
-  const d = ex.drive.history;
+  const observing = director.activity.kind === 'lifespan';
+  const m = observing ? shownHistory('mendel') : ex.mendel.history;
+  const d = observing ? shownHistory('drive') : ex.drive.history;
   const head = `<thead><tr><th rowspan="2">세대</th><th colspan="5">멘델 유전 (e = 0)</th><th colspan="6">호밍 드라이브</th></tr>
     <tr><th>W/W</th><th>D/W</th><th>D/D</th><th>D 보유</th><th>D 빈도</th><th>e</th><th>W/W</th><th>D/W</th><th>D/D</th><th>D 보유</th><th>D 빈도</th></tr></thead>`;
   const rows = m
@@ -448,10 +487,10 @@ ui.dialog.addEventListener('click', (ev) => {
 document.addEventListener('keydown', (ev) => {
   if (ui.dialog.open || ev.ctrlKey || ev.metaKey || ev.altKey) return;
   const t = ev.target as HTMLElement;
-  if (t instanceof HTMLInputElement) return;
+  if (t instanceof HTMLInputElement || t instanceof HTMLSelectElement) return;
   if (ev.code === 'Space') {
     ev.preventDefault();
-    if (!director.experiment.released) director.startRelease();
+    if (!director.experiment.released && director.activity.kind !== 'lifespan') director.startRelease();
     else director.togglePlay();
   } else if (ev.code === 'ArrowRight') {
     ev.preventDefault();
@@ -459,7 +498,7 @@ document.addEventListener('keydown', (ev) => {
   }
 });
 document.addEventListener('keyup', (ev) => {
-  if (ev.code === 'Space' && !(ev.target instanceof HTMLInputElement)) ev.preventDefault();
+  if (ev.code === 'Space' && !(ev.target instanceof HTMLInputElement || ev.target instanceof HTMLSelectElement)) ev.preventDefault();
 });
 
 // ---------- 범례 ----------
@@ -484,16 +523,25 @@ new ResizeObserver(() => {
     legendFs = fs;
     renderLegend();
     renderSummary();
+    renderChart();
   }
 }).observe(document.documentElement);
 
 // ---------- 애니메이션 루프 ----------
 let last = performance.now();
+function advanceFrame(dt: number, time: number): void {
+  director.tick(dt);
+  const a = director.activity;
+  if (a.kind === 'lifespan') {
+    const clock = `경과 ${a.elapsed.toFixed(1)}`;
+    if (ui.lifeClock.textContent !== clock) ui.lifeClock.textContent = clock;
+  }
+  for (const key of POP_KEYS) habs[key].habitat.frame(dt, time);
+}
 function loop(now: number): void {
   const dt = Math.min(0.25, Math.max(0, (now - last) / 1000));
   last = now;
-  director.tick(dt);
-  for (const key of POP_KEYS) habs[key].habitat.frame(dt, now / 1000);
+  advanceFrame(dt, now / 1000);
   requestAnimationFrame(loop);
 }
 
@@ -513,8 +561,7 @@ declare global {
 function advanceFor(seconds: number): string {
   const dt = 1 / 60;
   for (let t = 0; t < seconds; t += dt) {
-    director.tick(dt);
-    for (const key of POP_KEYS) habs[key].habitat.frame(dt, performance.now() / 1000 + t);
+    advanceFrame(dt, performance.now() / 1000 + t);
   }
   const a = director.activity;
   return JSON.stringify({ activity: a.kind, stage: a.kind === 'generation' ? a.stage : null, generation: director.experiment.generation, held: director.held });

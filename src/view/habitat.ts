@@ -227,6 +227,36 @@ export class Habitat {
     this.finishPending();
   }
 
+  onLifespanStart(showingParents: boolean): void {
+    if (showingParents) {
+      this.adults = this.parents;
+      this.parents = [];
+      this.children = [];
+    } else {
+      this.finishPending();
+    }
+    for (const s of this.adults) {
+      s.role = 'adult';
+      s.alpha = s.scale = 1;
+      s.meet = undefined;
+    }
+    this.examples = [];
+    this.exampleIds.clear();
+    this.selectedId = null;
+    this.showReleased = this.director.experiment.released && this.director.shownGeneration === 0;
+  }
+
+  removeExpired(): void {
+    const a = this.director.activity;
+    if (a.kind !== 'lifespan') return;
+    const cohort = a.cohorts[this.key];
+    this.adults = this.adults.filter((s) => cohort.fadeOpacity(s.m.id, a.elapsed) !== 0);
+    if (this.selectedId !== null && cohort.fadeOpacity(this.selectedId, a.elapsed) === 0) {
+      this.selectedId = null;
+      this.onPick(null);
+    }
+  }
+
   private finishPending(): void {
     if (!this.parents.length && !this.children.length) return;
     const byId = new Map(this.parents.map((s) => [s.m.id, s]));
@@ -425,6 +455,14 @@ export class Habitat {
 
     // --- 위치 갱신 ---
     for (const s of this.adults) {
+      if (act.kind === 'lifespan') {
+        const opacity = act.cohorts[this.key].fadeOpacity(s.m.id, act.elapsed);
+        if (opacity !== null) {
+          s.alpha = opacity;
+          continue;
+        }
+        if (!this.director.running) continue;
+      }
       s.wing += dt * s.wingRate;
       this.wander(s, dt, motion);
       s.alpha = 1;
@@ -516,10 +554,12 @@ export class Habitat {
       ctx.strokeStyle = `rgba(240, 150, 0, ${pulse})`;
       for (const s of [...this.adults, ...this.incoming]) {
         if (!s.m.released) continue;
+        if (act.kind === 'lifespan') ctx.globalAlpha = s.alpha;
         ctx.beginPath();
         ctx.arc(s.x, s.y, L * 0.62, 0, TAU);
         ctx.stroke();
       }
+      if (act.kind === 'lifespan') ctx.globalAlpha = 1;
     }
     for (const s of this.incoming) draw(s);
 
@@ -573,6 +613,7 @@ export class Habitat {
       const s = [...this.visibleSprites()].find((v) => v.m.id === this.selectedId);
       if (s) {
         ctx.save();
+        if (act.kind === 'lifespan') ctx.globalAlpha = s.alpha;
         ctx.strokeStyle = '#e8590c';
         ctx.lineWidth = Math.max(2.5, L * 0.08);
         ctx.setLineDash([L * 0.2, L * 0.12]);

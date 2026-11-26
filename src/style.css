@@ -300,6 +300,57 @@ input[type='range'] {
   list-style: none;
 }
 
+#stages[hidden] {
+  display: none;
+}
+
+.life-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.65rem;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: 0.84rem;
+  font-weight: 600;
+}
+
+.life-controls label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+}
+
+.life-controls input {
+  margin: 0;
+  accent-color: var(--primary);
+}
+
+.life-controls select {
+  color: inherit;
+  font: inherit;
+  border: 1px solid var(--line);
+  border-radius: 0.3rem;
+  background: var(--panel);
+}
+
+#life-clock {
+  min-width: 5.2em;
+  font-variant-numeric: tabular-nums;
+}
+
+#life-note {
+  color: var(--ink);
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
+.life-total {
+  position: absolute;
+  top: calc(100% + 0.25rem);
+  right: 0;
+  white-space: nowrap;
+}
+
 .stages li {
   display: flex;
   align-items: center;

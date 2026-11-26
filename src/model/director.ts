@@ -1,5 +1,6 @@
 import { Experiment, type ExperimentConfig, type PopKey, type Transition } from './experiment';
 import type { Mosquito } from './genetics';
+import { LifespanCohort } from './lifespan';
 
 /**
  * 세대 전환 타임라인. 화면과 무관한 순수 상태 기계이다.
@@ -23,6 +24,7 @@ export type Speed = 1 | 2;
 
 export type Activity =
   | { kind: 'idle' }
+  | { kind: 'lifespan'; generation: number; enabled: boolean; elapsed: number; endTime: number; cohorts: Record<PopKey, LifespanCohort> }
   | { kind: 'release'; progress: number; newcomers: Record<PopKey, Mosquito[]> }
   | {
       kind: 'generation';
@@ -33,6 +35,8 @@ export type Activity =
 
 export type DirectorEvent =
   | { type: 'reset' }
+  | { type: 'lifespanStart'; showingParents: boolean }
+  | { type: 'survivorsChanged' }
   | { type: 'releaseStart'; newcomers: Record<PopKey, Mosquito[]> }
   | { type: 'releaseEnd' }
   | { type: 'generationStart'; transitions: Record<PopKey, Transition> }
@@ -78,6 +82,36 @@ export class Director {
     return this.activity.kind !== 'idle';
   }
 
+  /** 화면과 집계가 가리키는 세대. 세대 교체 전에는 부모를 관찰한다. */
+  get shownGeneration(): number {
+    const a = this.activity;
+    if (a.kind === 'lifespan') return a.generation;
+    return this.experiment.generation - (a.kind === 'generation' && a.stage < 3 ? 1 : 0);
+  }
+
+  setLifespanEnabled(enabled: boolean, limit: number): void {
+    const a = this.activity;
+    if (a.kind === 'lifespan') {
+      a.enabled = enabled;
+      this.pause();
+      return;
+    }
+    if (!enabled || a.kind === 'release') return;
+    const generation = this.shownGeneration;
+    const showingParents = a.kind === 'generation' && a.stage < 3;
+    const seed = this.experiment.config.seed ^ Math.imul(generation + 1, 0x9e3779b1);
+    const cohort = (key: PopKey) => new LifespanCohort(
+      showingParents ? a.transitions[key].parents : this.experiment.pop(key).current, limit, seed,
+    );
+    const cohorts = { mendel: cohort('mendel'), drive: cohort('drive') };
+    this.activity = { kind: 'lifespan', generation, enabled: true, elapsed: 0,
+      endTime: Math.max(cohorts.mendel.endTime, cohorts.drive.endTime), cohorts };
+    this.holdAfter = null;
+    this.playing = this.running = false;
+    this.emit({ type: 'lifespanStart', showingParents });
+    this.emit({ type: 'state' });
+  }
+
   reset(config: Partial<ExperimentConfig> = {}): void {
     const prev = this.experiment.config;
     this.experiment = new Experiment({ ...prev, ...config });
@@ -104,6 +138,13 @@ export class Director {
   }
 
   play(): void {
+    if (this.activity.kind === 'lifespan') {
+      if (this.activity.enabled && this.activity.elapsed < this.activity.endTime) {
+        this.playing = this.running = true;
+        this.emit({ type: 'state' });
+      }
+      return;
+    }
     if (!this.experiment.released) return;
     if (!this.experiment.canAdvance() && this.activity.kind === 'idle') return;
     this.playing = true;
@@ -117,12 +158,13 @@ export class Director {
 
   pause(): void {
     this.playing = false;
-    if (this.activity.kind === 'generation') this.running = false;
+    if (this.activity.kind === 'generation' || this.activity.kind === 'lifespan') this.running = false;
     this.emit({ type: 'state' });
   }
 
   /** 자동 재생을 멈추되, 진행 중인 세대 전환은 끝까지 보여 준다 */
   finishCurrentAndStop(): void {
+    if (this.activity.kind === 'lifespan') return this.pause();
     this.playing = false;
     this.holdAfter = null;
     if (this.activity.kind === 'generation' && this.activity.progress >= 1) this.nextStage();
@@ -142,7 +184,7 @@ export class Director {
    */
   step(): void {
     const a = this.activity;
-    if (a.kind === 'release') return;
+    if (a.kind === 'release' || a.kind === 'lifespan') return;
     this.playing = false;
     if (a.kind === 'idle') {
       if (!this.experiment.canAdvance()) return;
@@ -205,6 +247,15 @@ export class Director {
     let guard = 0;
     while (remaining > 0 && guard++ < 16) {
       const a = this.activity;
+      if (a.kind === 'lifespan') {
+        if (!this.running) return;
+        a.elapsed = Math.min(a.endTime, a.elapsed + remaining);
+        const mendelChanged = a.cohorts.mendel.advanceTo(a.elapsed);
+        const driveChanged = a.cohorts.drive.advanceTo(a.elapsed);
+        if (mendelChanged || driveChanged) this.emit({ type: 'survivorsChanged' });
+        if (a.elapsed === a.endTime) this.pause();
+        return;
+      }
       if (a.kind === 'idle') {
         if (this.playing && this.experiment.canAdvance()) {
           this.beginGeneration();

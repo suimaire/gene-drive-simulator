@@ -10,6 +10,8 @@ import { drawMosquito, GENO_COLOR } from './mosquito';
  * 움직임에는 Math.random을 쓰므로 유전 계산용 난수와 섞이지 않는다.
  */
 
+import { FADE_TICKS, TICKS_PER_UNIT, type Community } from '../model/population';
+
 type Role = 'adult' | 'parent' | 'child' | 'incoming';
 
 interface Sprite {
@@ -37,6 +39,8 @@ interface Sprite {
   // 교배 사례 부모가 모이는 위치
   meet?: { x: number; y: number };
 }
+
+type Flight = Pick<Sprite, 'x' | 'y' | 'heading' | 'speed' | 'turnPhase' | 'turnFreq' | 'wing' | 'wingRate' | 'boost'>;
 
 export interface Example {
   child: Mosquito;
@@ -67,6 +71,10 @@ export class Habitat {
   private H = 0;
   private dpr = 1;
   private L = 36;
+  private community: Community | null = null;
+  private flights = new Map<number, Flight>();
+  populationPick: number | null = null;
+  onPopulationPick: () => void = () => {};
   private adults: Sprite[] = [];
   private parents: Sprite[] = [];
   private children: Sprite[] = [];
@@ -99,11 +107,9 @@ export class Habitat {
 
   // ---------- 상태 동기화 ----------
 
-  private makeSprite(m: Mosquito, role: Role, x?: number, y?: number): Sprite {
+  private makeFlight(x?: number, y?: number): Flight {
     const margin = this.L * 0.7;
     return {
-      m,
-      role,
       x: x ?? rand(margin, Math.max(margin, this.W - margin)),
       y: y ?? rand(margin, Math.max(margin, this.H - margin)),
       heading: rand(0, TAU),
@@ -113,6 +119,12 @@ export class Habitat {
       wing: rand(0, TAU),
       wingRate: rand(26, 34),
       boost: 0,
+    };
+  }
+
+  private makeSprite(m: Mosquito, role: Role, x?: number, y?: number): Sprite {
+    return {
+      m, role, ...this.makeFlight(x, y),
       alpha: 1,
       scale: 1,
       spawnAt: 0,
@@ -227,36 +239,6 @@ export class Habitat {
     this.finishPending();
   }
 
-  onLifespanStart(showingParents: boolean): void {
-    if (showingParents) {
-      this.adults = this.parents;
-      this.parents = [];
-      this.children = [];
-    } else {
-      this.finishPending();
-    }
-    for (const s of this.adults) {
-      s.role = 'adult';
-      s.alpha = s.scale = 1;
-      s.meet = undefined;
-    }
-    this.examples = [];
-    this.exampleIds.clear();
-    this.selectedId = null;
-    this.showReleased = this.director.experiment.released && this.director.shownGeneration === 0;
-  }
-
-  removeExpired(): void {
-    const a = this.director.activity;
-    if (a.kind !== 'lifespan') return;
-    const cohort = a.cohorts[this.key];
-    this.adults = this.adults.filter((s) => cohort.fadeOpacity(s.m.id, a.elapsed) !== 0);
-    if (this.selectedId !== null && cohort.fadeOpacity(this.selectedId, a.elapsed) === 0) {
-      this.selectedId = null;
-      this.onPick(null);
-    }
-  }
-
   private finishPending(): void {
     if (!this.parents.length && !this.children.length) return;
     const byId = new Map(this.parents.map((s) => [s.m.id, s]));
@@ -302,6 +284,10 @@ export class Habitat {
         if (s.from) s.from = { x: s.from.x * sx, y: s.from.y * sy };
         if (s.ctrl) s.ctrl = { x: s.ctrl.x * sx, y: s.ctrl.y * sy };
       }
+    }
+    for (const f of this.flights.values()) {
+      f.x *= sx;
+      f.y *= sy;
     }
     for (const e of this.examples) e.meet = { x: e.meet.x * sx, y: e.meet.y * sy };
     this.W = W;
@@ -358,6 +344,19 @@ export class Habitat {
     const rect = this.canvas.getBoundingClientRect();
     const x = ev.clientX - rect.left;
     const y = ev.clientY - rect.top;
+    if (this.community) {
+      this.populationPick = null;
+      let nearest = (this.L * 0.7) ** 2;
+      for (const [id, f] of this.flights) {
+        const distance = (f.x - x) ** 2 + (f.y - y) ** 2;
+        if (distance < nearest) {
+          nearest = distance;
+          this.populationPick = id;
+        }
+      }
+      this.onPopulationPick();
+      return;
+    }
     let best: Sprite | null = null;
     let bestD = (this.L * 0.7) ** 2;
     for (const s of this.visibleSprites()) {
@@ -390,7 +389,7 @@ export class Habitat {
 
   // ---------- 프레임 ----------
 
-  private wander(s: Sprite, dt: number, speedFactor = 1): void {
+  private wander(s: Flight, dt: number, speedFactor = 1): void {
     const L = this.L;
     s.turnPhase += dt * s.turnFreq;
     let turn = Math.sin(s.turnPhase) * 1.0 + Math.sin(s.turnPhase * 0.37 + 1.3) * 0.4;
@@ -416,7 +415,7 @@ export class Habitat {
     s.y = Math.min(this.H - L * 0.3, Math.max(L * 0.3, s.y));
   }
 
-  private steerTo(s: Sprite, target: { x: number; y: number }, faceAngle: number, dt: number, strength: number): void {
+  private steerTo(s: Flight, target: { x: number; y: number }, faceAngle: number, dt: number, strength: number): void {
     const k = Math.min(1, dt * 3) * strength;
     const dx = target.x - s.x;
     const dy = target.y - s.y;
@@ -427,6 +426,87 @@ export class Habitat {
     let diff = want - s.heading;
     diff = Math.atan2(Math.sin(diff), Math.cos(diff));
     s.heading += diff * Math.min(1, dt * 5);
+  }
+
+  private paintBackground(): void {
+    const ctx = this.ctx;
+    if (!this.bg) this.bg = this.drawBackground();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.drawImage(this.bg, 0, 0);
+    ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+  }
+
+  setCommunity(community: Community | null): void {
+    if (this.community === community) return;
+    this.community = community;
+    this.flights.clear();
+    this.populationPick = null;
+  }
+
+  frameCommunity(tick: number, dt: number): void {
+    const group = this.community;
+    if (!group) return;
+    const ctx = this.ctx;
+    this.paintBackground();
+    for (const id of this.flights.keys()) {
+      if (!group.living.has(id)) this.flights.delete(id);
+    }
+    if (this.populationPick !== null && !group.living.has(this.populationPick)) {
+      this.populationPick = null;
+      this.onPopulationPick();
+    }
+    for (const m of group.living.values()) {
+      if (this.flights.has(m.id)) continue;
+      const mother = m.mother === null ? undefined : this.flights.get(m.mother);
+      const f = this.makeFlight(mother?.x, mother?.y);
+      if (mother) f.boost = 1;
+      this.flights.set(m.id, f);
+    }
+
+    const meeting = new Set<number>();
+    for (const pair of group.pairs) {
+      const mother = this.flights.get(pair.mother)!;
+      const father = this.flights.get(pair.father)!;
+      const x = (mother.x + father.x) / 2;
+      const y = (mother.y + father.y) / 2;
+      this.steerTo(mother, { x: x - this.L * 0.42, y }, 0, dt, 1);
+      this.steerTo(father, { x: x + this.L * 0.42, y }, Math.PI, dt, 1);
+      meeting.add(pair.mother);
+      meeting.add(pair.father);
+      if (pair === group.pairs[0]) {
+        ctx.save();
+        ctx.strokeStyle = '#56688a';
+        ctx.setLineDash([this.L * 0.12, this.L * 0.1]);
+        ctx.beginPath();
+        ctx.moveTo(mother.x, mother.y);
+        ctx.lineTo(father.x, father.y);
+        ctx.stroke();
+        ctx.restore();
+      }
+    }
+
+    for (const m of group.living.values()) {
+      const f = this.flights.get(m.id)!;
+      const remaining = m.diesAt - tick;
+      const alpha = Math.min(1, remaining / FADE_TICKS);
+      if (remaining > FADE_TICKS && dt > 0) {
+        f.wing += dt * f.wingRate;
+        if (!meeting.has(m.id)) this.wander(f, dt);
+      }
+      const growth = m.mother === null ? 1 : clamp01((tick - m.bornAt) / (TICKS_PER_UNIT * 0.45));
+      drawMosquito(ctx, { x: f.x, y: f.y, size: this.L * (0.35 + 0.65 * easeOut(growth)),
+        angle: f.heading, genotype: 'WW', sex: m.sex, wing: f.wing, alpha });
+      if (growth < 1 || this.populationPick === m.id) {
+        ctx.save();
+        ctx.globalAlpha = alpha * (this.populationPick === m.id ? 1 : 1 - growth);
+        ctx.strokeStyle = this.populationPick === m.id ? '#e8590c' : GENO_COLOR.WW.dark;
+        ctx.lineWidth = Math.max(2, this.L * 0.06);
+        ctx.beginPath();
+        ctx.arc(f.x, f.y, this.L * (0.4 + 0.3 * growth), 0, TAU);
+        ctx.stroke();
+        ctx.restore();
+      }
+    }
   }
 
   frame(dt: number, time: number): void {
@@ -455,14 +535,6 @@ export class Habitat {
 
     // --- 위치 갱신 ---
     for (const s of this.adults) {
-      if (act.kind === 'lifespan') {
-        const opacity = act.cohorts[this.key].fadeOpacity(s.m.id, act.elapsed);
-        if (opacity !== null) {
-          s.alpha = opacity;
-          continue;
-        }
-        if (!this.director.running) continue;
-      }
       s.wing += dt * s.wingRate;
       this.wander(s, dt, motion);
       s.alpha = 1;
@@ -519,10 +591,7 @@ export class Habitat {
     }
 
     // --- 그리기 ---
-    if (!this.bg) this.bg = this.drawBackground();
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.drawImage(this.bg, 0, 0);
-    ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+    this.paintBackground();
 
     const draw = (s: Sprite) =>
       drawMosquito(ctx, {
@@ -554,12 +623,10 @@ export class Habitat {
       ctx.strokeStyle = `rgba(240, 150, 0, ${pulse})`;
       for (const s of [...this.adults, ...this.incoming]) {
         if (!s.m.released) continue;
-        if (act.kind === 'lifespan') ctx.globalAlpha = s.alpha;
         ctx.beginPath();
         ctx.arc(s.x, s.y, L * 0.62, 0, TAU);
         ctx.stroke();
       }
-      if (act.kind === 'lifespan') ctx.globalAlpha = 1;
     }
     for (const s of this.incoming) draw(s);
 
@@ -613,7 +680,6 @@ export class Habitat {
       const s = [...this.visibleSprites()].find((v) => v.m.id === this.selectedId);
       if (s) {
         ctx.save();
-        if (act.kind === 'lifespan') ctx.globalAlpha = s.alpha;
         ctx.strokeStyle = '#e8590c';
         ctx.lineWidth = Math.max(2.5, L * 0.08);
         ctx.setLineDash([L * 0.2, L * 0.12]);

@@ -344,6 +344,28 @@ input[type='range'] {
   font-weight: 700;
 }
 
+#app:not(.observing-population) .population-only,
+#app.observing-population .genetics-only {
+  display: none;
+}
+
+#app.observing-population .topbar .e-block,
+#app.observing-population .topbar .p-block {
+  display: flex;
+  visibility: hidden;
+}
+
+.population-balance {
+  display: grid;
+  gap: 0.45rem;
+  font-size: 0.9rem;
+}
+
+#population-equations {
+  white-space: pre-line;
+  font-variant-numeric: tabular-nums;
+}
+
 .life-total {
   position: absolute;
   top: calc(100% + 0.25rem);

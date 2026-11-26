@@ -10,7 +10,7 @@
     <div id="app">
       <header class="topbar">
         <div class="title-block">
-          <h1>유전자 드라이브는 어떻게 퍼질까?</h1>
+          <h1><span class="genetics-only">유전자 드라이브는 어떻게 퍼질까?</span><span class="population-only">출생이 사망을 보충할까?</span></h1>
           <span class="tag">가상 개체군 모형</span>
         </div>
 
@@ -20,7 +20,7 @@
           <span class="gen-sub" id="gen-sub">방사 전</span>
         </div>
 
-        <div class="e-block">
+        <div class="e-block genetics-only">
           <div class="e-top">
             <label for="e-slider">호밍 효율 e</label>
             <output id="e-value" for="e-slider">0.8</output>
@@ -29,7 +29,7 @@
           <div class="e-hint" id="e-hint" aria-live="polite"></div>
         </div>
 
-        <div class="p-block">
+        <div class="p-block genetics-only">
           <span class="p-caption">D/W 부모의 D 전달 확률</span>
           <span class="p-value" id="p-value">90%</span>
         </div>
@@ -47,31 +47,33 @@
       </header>
 
       <div class="stagebar">
-        <ol class="stages" id="stages">
+        <ol class="stages genetics-only" id="stages">
           <li data-stage="0"><span>1</span>부모 세대</li>
           <li data-stage="1"><span>2</span>교배와 유전</li>
           <li data-stage="2"><span>3</span>자손 등장</li>
           <li data-stage="3"><span>4</span>세대 교체</li>
         </ol>
-        <span id="life-note" hidden></span>
-        <div class="life-controls" role="group" aria-label="수명 관찰 설정">
-          <label><input type="checkbox" id="life-toggle" /> 수명 관찰</label>
-          <label>가상 수명
+        <span id="life-note" class="population-only">두 집단의 초기 크기와 수명 조건은 같습니다.</span>
+        <div class="life-controls" role="group" aria-label="관찰 모드 설정">
+          <label><input type="checkbox" id="life-toggle" /> 개체수 변화</label>
+          <label class="population-only">가상 수명
             <select id="life-limit" aria-label="최대 가상 수명">
               <option value="10">10</option><option value="20" selected>20</option><option value="40">40</option>
             </select>
           </label>
-          <span id="life-clock" hidden>경과 0.0</span>
+          <span id="life-clock" class="population-only">경과 0.0</span>
         </div>
-        <div class="legend" id="legend"></div>
+        <div class="legend genetics-only" id="legend"></div>
       </div>
 
       <main class="habitats" id="habitats">
         <section class="habitat mendel" data-key="mendel">
           <canvas aria-label="멘델 유전 집단의 모기"></canvas>
           <div class="hab-label">
-            <div class="hab-name">멘델 유전</div>
-            <div class="hab-rule">e = 0 고정, D 전달 <b>50%</b></div>
+            <div class="hab-name genetics-only">멘델 유전</div>
+            <div class="hab-name population-only">기본 번식 조건</div>
+            <div class="hab-rule population-only">모든 개체에 번식 기회</div>
+            <div class="hab-rule genetics-only">e = 0 고정, D 전달 <b>50%</b></div>
           </div>
           <div class="hab-counts"></div>
           <div class="inspector" hidden></div>
@@ -79,8 +81,10 @@
         <section class="habitat drive" data-key="drive">
           <canvas aria-label="호밍 드라이브 집단의 모기"></canvas>
           <div class="hab-label">
-            <div class="hab-name">호밍 드라이브</div>
-            <div class="hab-rule">e = <b class="drive-e">0.8</b>, D 전달 <b class="drive-p">90%</b></div>
+            <div class="hab-name genetics-only">호밍 드라이브</div>
+            <div class="hab-name population-only">번식 참여 제한</div>
+            <div class="hab-rule population-only">일부 개체에 번식 기회</div>
+            <div class="hab-rule genetics-only">e = <b class="drive-e">0.8</b>, D 전달 <b class="drive-p">90%</b></div>
           </div>
           <div class="hab-counts"></div>
           <div class="inspector" hidden></div>
@@ -88,6 +92,7 @@
 
         <div class="lmo-card" id="lmo-card" hidden>
           <button class="close" type="button" aria-label="질문 닫기">×</button>
+          <strong class="population-only">유전자형 관찰과 연결해서 생각해 보기</strong>
           <p class="lmo-q">
             가상 집단에서 유전정보의 전달 방식만 바꿨는데도 여러 세대 후 구성비가 달라졌습니다.
             이러한 LMO를 실제 환경에 방출하려면 무엇을 추가로 확인해야 할까요?
@@ -105,11 +110,16 @@
       <footer class="summary">
         <div class="sum-pop mendel" id="sum-mendel"></div>
         <div class="sum-chart">
-          <div class="chart-head">
+          <div class="chart-head genetics-only">
             <span class="chart-title">세대별 D 보유 개체 비율</span>
             <span class="chart-legend"><i class="sw mendel"></i>멘델 <i class="sw drive"></i>호밍</span>
           </div>
-          <div class="chart-host" id="chart"></div>
+          <div class="chart-host genetics-only" id="chart"></div>
+          <div class="population-only population-balance">
+            <strong>출생이 사망을 보충했나요?</strong>
+            <span>현재 생존 수 = 처음 개체수 + 누적 출생 − 누적 사망</span>
+            <span id="population-equations"></span>
+          </div>
         </div>
         <div class="sum-pop drive" id="sum-drive"></div>
         <div class="sum-side">
@@ -130,7 +140,7 @@
       </div>
       <div class="dlg-body">
         <section>
-          <h3>모형 가정</h3>
+          <h3>유전자형 관찰의 가정</h3>
           <ul>
             <li>모기 그림 하나는 모형이 계산한 개체 하나입니다. 개체마다 번호, 성별, 유전자형, 세대, 부모 번호를 가집니다.</li>
             <li>유전자형은 W/W, D/W, D/D 세 가지입니다. W/W 부모는 W만, D/D 부모는 D만 전달합니다.</li>
@@ -152,16 +162,20 @@
           </ul>
         </section>
         <section>
-          <h3>이 모형에 넣지 않은 것</h3>
+          <h3>개체수 변화 관찰의 가정</h3>
+          <p>두 집단은 나이가 다양한 80마리에서 출발합니다. 기본 조건에서는 모든 개체에 번식 기회를 주고, 제한 조건에서는 개체마다 35% 확률로 기회를 부여합니다. 이 조건은 자손에게 유전되지 않습니다. 개체별 수명은 두 집단에서 같은 규칙을 따릅니다.</p>
+          <p>4 가상 시간마다 살아 있는 암수 중 번식 가능한 개체가 짝을 이룹니다. 새끼는 태어난 뒤 4 가상 시간이 지나야 짝을 이룰 수 있습니다. 한 쌍에서 한 자손이 태어날 수 있고, 공간이 가득 차면(120마리) 출생을 멈춥니다. 부모도 자신의 수명이 다할 때까지 살아 있습니다. 모기를 누르면 번식 기회와 부모 번호를 확인할 수 있습니다.</p>
+          <h3>연구 사례에서 생존과 번식 구별하기</h3>
+          <p>Kyrou 등(2018)의 케이지 실험에서 <i>doublesex</i>의 암컷 특이적 기능이 손상된 동형접합 암컷(수업 표기 D/D)은 성체가 되었지만 불임이었습니다. 같은 동형접합 수컷은 번식할 수 있었습니다. 연구진은 케이지에서 번식이 억제되어 새 세대가 유지되지 못하는 현상을 관찰했습니다.</p>
+          <p>화면의 개체수 모형은 유전자형이나 호밍 효율을 입력받지 않습니다. 번식 기회와 가상 수명은 수업에서 두 조건을 비교하기 위한 가정입니다. 실제 연구의 개체수 변화나 야외 방출 결과를 예측할 수 없습니다.</p>
+          <h3>유전자형 관찰의 범위</h3>
           <ul>
-            <li>수명 관찰에서는 표시 중인 세대만 남기고 번식을 멈춥니다. 선택한 최대 가상 수명 안에서 각 개체의 잔여 수명이 다릅니다. 움직임이 멎은 뒤 그림이 사라질 때 생존 수에서 제외합니다.</li>
-            <li>두 집단의 수명 규칙은 같으며 유전자형과 호밍 효율 e에 독립적입니다. 가상 시간은 교육용 단위입니다. 실제 종의 수명이나 <i>doublesex</i> 연구의 불임에 따른 개체군 붕괴를 정량적으로 재현하지 않습니다.</li>
             <li>불임이나 적합도 비용, 저항성 대립유전자, 공간 이동, 실제 환경 조건은 포함하지 않았습니다.</li>
             <li>따라서 결과는 실제 야외 확산 속도나 효과를 예측하지 않습니다. 세대별 그래프는 전달 확률이 자손의 구성비에 주는 영향을 보여 줍니다.</li>
           </ul>
         </section>
         <section>
-          <h3>세대별 기록</h3>
+          <h3>유전자형 관찰의 세대별 기록</h3>
           <div class="table-wrap"><table id="history-table"></table></div>
           <p class="note">D 보유 비율은 D/W와 D/D 개체의 비율이고, D 빈도는 전체 대립유전자 중 D의 비율입니다.</p>
         </section>
@@ -171,6 +185,7 @@
             <li>Burt, A. (2003). Site-specific selfish genes as tools for the control and genetic engineering of natural populations. <i>Proceedings of the Royal Society B</i>, 270, 921–928.</li>
             <li>Gantz, V. M. et al. (2015). Highly efficient Cas9-mediated gene drive for population modification of the malaria vector mosquito <i>Anopheles stephensi</i>. <i>PNAS</i>, 112(49), E6736–E6743.</li>
             <li>Hammond, A. et al. (2016). A CRISPR-Cas9 gene drive system targeting female reproduction in the malaria mosquito vector <i>Anopheles gambiae</i>. <i>Nature Biotechnology</i>, 34, 78–83.</li>
+            <li>Kyrou, K. et al. (2018). <i>Nature Biotechnology</i>, 36, 1062–1066. <a href="https://doi.org/10.1038/nbt.4245" target="_blank" rel="noopener noreferrer">연구 원문</a></li>
             <li>National Academies of Sciences, Engineering, and Medicine (2016). <i>Gene Drives on the Horizon</i>. The National Academies Press.</li>
             <li>바이오안전성에 관한 카르타헤나 의정서, 유전자변형생물체의 국가간 이동 등에 관한 법률</li>
           </ul>

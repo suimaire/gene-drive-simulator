@@ -10,6 +10,7 @@ import {
   type Genotype,
   type Mosquito,
 } from './model/genetics';
+import { CONDITION_LABEL, INITIAL_COUNT, PopulationObservation, ROUND_TICKS, TICKS_PER_UNIT, type Condition } from './model/population';
 import { CarrierChart } from './view/chart';
 import { Habitat, type Example, type HabitatPick } from './view/habitat';
 import { mosquitoIcon } from './view/mosquito';
@@ -20,6 +21,9 @@ const seedParam = Number(params.get('seed'));
 const seed = Number.isFinite(seedParam) && params.has('seed') ? Math.floor(seedParam) : DEFAULT_CONFIG.seed;
 
 const director = new Director({ seed });
+let populationMode = false;
+let observation: PopulationObservation | null = null;
+const conditions: Record<PopKey, Condition> = { mendel: 'usual', drive: 'limited' };
 
 const $ = <T extends HTMLElement = HTMLElement>(sel: string, root: ParentNode = document) => root.querySelector(sel) as T;
 
@@ -34,10 +38,12 @@ const ui = {
   step: $<HTMLButtonElement>('#btn-step'),
   play: $<HTMLButtonElement>('#btn-play'),
   reset: $<HTMLButtonElement>('#btn-reset'),
-  lifeToggle: $<HTMLInputElement>('#life-toggle'),
-  lifeLimit: $<HTMLSelectElement>('#life-limit'),
-  lifeClock: $('#life-clock'),
-  lifeNote: $('#life-note'),
+  mode: $<HTMLInputElement>('#life-toggle'),
+  limit: $<HTMLSelectElement>('#life-limit'),
+  clock: $('#life-clock'),
+  equations: $('#population-equations'),
+  unit: $('.gen-unit'),
+  differenceLabel: $('.diff-caption'),
   speedBtns: [...document.querySelectorAll<HTMLButtonElement>('.speed button')],
   stages: [...document.querySelectorAll<HTMLLIElement>('#stages li')],
   legend: $('#legend'),
@@ -85,6 +91,7 @@ for (const key of POP_KEYS) {
     insp: null,
   };
   habitat.onPick = (pick) => onPick(key, pick);
+  habitat.onPopulationPick = () => renderPopulationPick(key);
   habitat.rebuild();
 }
 
@@ -92,15 +99,21 @@ const chart = new CarrierChart($('#chart'), 10);
 
 // ---------- 표시할 세대 ----------
 /** 세대 번호와 수치는 '세대 교체' 단계에 들어설 때 바뀐다. */
+function shownGeneration(): number {
+  const a = director.activity;
+  const g = director.experiment.generation;
+  if (a.kind === 'generation' && a.stage < 3) return g - 1;
+  return g;
+}
+
 function shownHistory(key: PopKey): GenerationRecord[] {
   const pop = director.experiment.pop(key);
-  return pop.history.slice(0, director.shownGeneration + 1);
+  return pop.history.slice(0, shownGeneration() + 1);
 }
 
 function shownComposition(key: PopKey): Composition {
   const ex = director.experiment;
   const a = director.activity;
-  if (a.kind === 'lifespan') return a.cohorts[key].composition;
   if (!ex.released || a.kind === 'release') {
     // 방사 전(또는 방사 중)에는 기존 집단만
     return summarize(ex.pop(key).current.filter((m) => !m.released));
@@ -119,7 +132,7 @@ function renderCounts(): void {
     const c = shownComposition(key);
     habs[key].counts.innerHTML = GENOTYPES.map(
       (g) => `<span class="cnt ${g}">${genoSwatch(g)}<span class="cnt-l">${GENOTYPE_LABEL[g]}</span><b>${c[g]}</b></span>`,
-    ).join('') + (director.activity.kind === 'lifespan' ? `<span class="cnt life-total">생존 <b>${c.total}</b>마리</span>` : '');
+    ).join('');
   }
 }
 
@@ -134,36 +147,28 @@ function barHtml(c: Composition | undefined): string {
 
 function renderSummary(): void {
   const ex = director.experiment;
-  const gen = director.shownGeneration;
-  const observing = director.activity.kind === 'lifespan';
-  const carriers: Record<PopKey, number | null> = { mendel: 0, drive: 0 };
+  const gen = shownGeneration();
+  const carriers: Record<PopKey, number> = { mendel: 0, drive: 0 };
   for (const key of POP_KEYS) {
     const pop = ex.pop(key);
     const now = shownComposition(key);
     const releasing = director.activity.kind === 'release';
     const first = ex.released && !releasing ? pop.initial?.composition : undefined;
-    carriers[key] = now.total ? now.carrierFraction : null;
+    carriers[key] = now.carrierFraction;
     const name = key === 'mendel' ? '멘델 유전' : '호밍 드라이브';
-    const nowLabel = observing ? '현재 생존' : !ex.released ? '방사 전' : releasing ? '방사 중' : `지금 ${gen}세대`;
+    const nowLabel = !ex.released ? '방사 전' : releasing ? '방사 중' : `지금 ${gen}세대`;
     habs[key].summary.innerHTML = `
       <div class="sum-head">
         <span class="sum-name">${name}</span>
-        <span class="sum-carrier"><span class="sum-cap">D 보유</span><b>${now.carriers}</b><span class="sum-of">/ ${now.total}</span><em>${now.total ? pct(now.carrierFraction) : '계산 불가'}</em></span>
+        <span class="sum-carrier"><span class="sum-cap">D 보유</span><b>${now.carriers}</b><span class="sum-of">/ ${now.total}</span><em>${pct(now.carrierFraction)}</em></span>
       </div>
       <div class="bar-row"><span class="bar-label">처음</span>${barHtml(first)}</div>
       <div class="bar-row now"><span class="bar-label">${nowLabel}</span>${barHtml(now)}</div>`;
   }
-  if (carriers.drive === null || carriers.mendel === null) {
-    ui.diff.textContent = '계산 불가';
-  } else {
-    const d = Math.round((carriers.drive - carriers.mendel) * 100);
-    ui.diff.textContent = ex.released ? `${d > 0 ? '+' : d < 0 ? '−' : ''}${Math.abs(d)}%p` : '0%p';
-  }
-}
-
-function renderChart(): void {
+  const d = Math.round((carriers.drive - carriers.mendel) * 100);
+  ui.diff.textContent = ex.released ? `${d > 0 ? '+' : d < 0 ? '−' : ''}${Math.abs(d)}%p` : '0%p';
   chart.update(
-    director.experiment.released
+    ex.released
       ? [
           { key: 'mendel', color: '#56688a', history: shownHistory('mendel') },
           { key: 'drive', color: '#e0600f', history: shownHistory('drive'), markE: true },
@@ -173,26 +178,16 @@ function renderChart(): void {
 }
 
 function renderHeader(): void {
+  if (populationMode) {
+    renderPopulationHeader();
+    return;
+  }
   const ex = director.experiment;
   const a = director.activity;
-  const gen = director.shownGeneration;
-  const observing = a.kind === 'lifespan';
-  ui.lifeToggle.checked = observing && a.enabled;
-  ui.lifeToggle.disabled = a.kind === 'release';
-  ui.lifeLimit.disabled = observing;
-  ui.lifeNote.hidden = ui.lifeClock.hidden = !observing;
-  $('#stages').hidden = observing;
-  ui.eSlider.disabled = observing;
-  if (observing) {
-    ui.lifeClock.textContent = `경과 ${a.elapsed.toFixed(1)}`;
-    ui.lifeNote.textContent = a.elapsed >= a.endTime ? '관찰 완료. 자손 생성 없음. 유전 관찰은 ‘처음으로’'
-      : !a.enabled ? '관찰 중지. 자손 생성 없음. 유전 관찰은 ‘처음으로’'
-      : '현재 세대만 관찰합니다. 자손 생성 없음';
-  }
+  const gen = shownGeneration();
   ui.genNum.textContent = String(gen);
   let sub = '';
-  if (observing) sub = '수명 관찰';
-  else if (!ex.released) sub = '방사 전';
+  if (!ex.released) sub = '방사 전';
   else if (a.kind === 'release') sub = '방사 중';
   else if (a.kind === 'generation' && a.stage < 3) sub = `${ex.generation}세대 만드는 중`;
   else if (!ex.canAdvance() && a.kind === 'idle') sub = '마지막 세대';
@@ -212,12 +207,12 @@ function renderHeader(): void {
   ui.release.textContent = released ? '방사 완료' : '가상 방사';
   ui.release.classList.toggle('primary', !released);
 
-  const canStep = !observing && released && a.kind !== 'release' && (a.kind === 'generation' || ex.canAdvance());
+  const canStep = released && a.kind !== 'release' && (a.kind === 'generation' || ex.canAdvance());
   ui.step.disabled = !canStep;
   ui.step.textContent = director.held ? '다음 단계' : '한 세대 관찰';
   ui.step.classList.toggle('primary', canStep && (director.held || (gen === 0 && a.kind === 'idle')));
 
-  const canPlay = observing ? a.enabled && a.elapsed < a.endTime : canStep;
+  const canPlay = released && a.kind !== 'release' && (a.kind === 'generation' || ex.canAdvance());
   ui.play.disabled = !canPlay;
   ui.play.classList.toggle('playing', director.playing);
   $('.ico', ui.play).textContent = director.playing ? '❚❚' : '▶';
@@ -239,7 +234,94 @@ function renderAll(): void {
   renderHeader();
   renderCounts();
   renderSummary();
-  renderChart();
+}
+
+function renderPopulationHeader(): void {
+  if (!observation) return;
+  const obs = observation;
+  ui.genNum.textContent = String(Math.ceil(obs.tick / ROUND_TICKS));
+  ui.genSub.textContent = obs.finished ? '관찰 완료' : obs.running ? '관찰 중' : obs.tick ? '일시정지' : '시작 전';
+  ui.limit.disabled = obs.running || obs.tick > 0;
+  ui.release.textContent = '관찰 시작';
+  ui.release.disabled = obs.running || obs.tick > 0;
+  ui.release.classList.toggle('primary', !ui.release.disabled);
+  ui.step.textContent = '한 회차 관찰';
+  ui.step.disabled = ui.play.disabled = obs.finished;
+  ui.step.classList.remove('primary');
+  ui.play.classList.toggle('playing', obs.running);
+  $('.ico', ui.play).textContent = obs.running ? '❚❚' : '▶';
+  $('.lbl', ui.play).textContent = obs.running ? '일시정지' : '재생';
+  ui.play.setAttribute('aria-label', obs.running ? '일시정지' : '재생');
+  ui.speedBtns.forEach(b => b.classList.toggle('on', Number(b.dataset.speed) === director.speed));
+}
+
+function renderPopulationCounts(): void {
+  if (!observation) return;
+  const lines: string[] = [];
+  for (const key of POP_KEYS) {
+    const group = observation.groups[conditions[key]];
+    const total = group.living.size;
+    const label = CONDITION_LABEL[group.condition];
+    habs[key].counts.innerHTML = `<span class="cnt">생존 <b>${total}</b>마리</span>`;
+    habs[key].summary.innerHTML = `<div class="sum-head"><span class="sum-name">${label}</span><span class="sum-carrier"><b>${total}</b>마리</span></div>
+      <div class="bar-row">누적 출생 <b>${group.births}</b>마리</div>
+      <div class="bar-row">누적 사망 <b>${group.deaths}</b>마리</div>`;
+    lines.push(`${group.condition === 'usual' ? '기본' : '제한'}　${INITIAL_COUNT} + ${group.births} − ${group.deaths} = ${total}`);
+  }
+  ui.equations.textContent = lines.join('\n');
+  ui.diff.textContent = `${Math.abs(observation.groups.usual.living.size - observation.groups.limited.living.size)}마리`;
+}
+
+function renderPopulationPick(key: PopKey): void {
+  const h = habs[key];
+  const id = h.habitat.populationPick;
+  const m = id == null ? undefined : observation?.groups[conditions[key]].living.get(id);
+  h.inspector.hidden = !m;
+  if (!m) return;
+  h.inspector.innerHTML = `<div class="insp-head"><span>${m.id}번 ${m.sex === 'F' ? '암컷' : '수컷'}</span><button class="close" type="button" aria-label="닫기">×</button></div>
+    <div>${m.canReproduce ? '번식 기회 있음' : '번식 기회 제한'}</div>
+    <div>${m.mother === null ? '처음부터 있던 개체' : `어미 ${m.mother}번, 아비 ${m.father}번`}</div>`;
+  $('.close', h.inspector).onclick = () => {
+    h.habitat.populationPick = null;
+    renderPopulationPick(key);
+  };
+}
+
+function showMode(): void {
+  $('#app').classList.toggle('observing-population', populationMode);
+  ui.mode.checked = populationMode;
+  ui.unit.textContent = populationMode ? '회차' : '세대';
+  ui.differenceLabel.textContent = populationMode ? '생존 수 차이' : '두 집단 차이';
+  ui.lmoCard.hidden = true;
+  if (populationMode && !observation) observation = new PopulationObservation(Number(ui.limit.value), seed);
+  for (const key of POP_KEYS) {
+    const h = habs[key];
+    h.habitat.setCommunity(populationMode ? observation!.groups[conditions[key]] : null);
+    $('canvas', h.section).setAttribute('aria-label', populationMode ? CONDITION_LABEL[conditions[key]] + '의 모기'
+      : (key === 'mendel' ? '멘델 유전' : '호밍 드라이브') + ' 집단의 모기');
+    if (populationMode) renderPopulationPick(key);
+    else renderInspector(key);
+  }
+  if (populationMode) {
+    renderPopulationCounts();
+    renderPopulationHeader();
+    ui.clock.textContent = `경과 ${(observation!.tick / TICKS_PER_UNIT).toFixed(1)}`;
+  } else {
+    renderAll();
+  }
+}
+
+function playOrPause(): void {
+  if (!populationMode || !observation) return director.togglePlay();
+  if (observation.running) observation.running = false;
+  else observation.play();
+  renderPopulationHeader();
+}
+
+function step(): void {
+  if (!populationMode || !observation) return director.step();
+  observation.play(true);
+  renderPopulationHeader();
 }
 
 // ---------- 확대 보기 (교배 사례, 가계) ----------
@@ -334,22 +416,7 @@ function onPick(key: PopKey, pick: HabitatPick | null): void {
 // ---------- 타임라인 이벤트 ----------
 director.on((ev) => {
   switch (ev.type) {
-    case 'lifespanStart':
-      for (const key of POP_KEYS) {
-        habs[key].habitat.onLifespanStart(ev.showingParents);
-        habs[key].insp = null;
-        renderInspector(key);
-      }
-      ui.eHint.textContent = '';
-      renderAll();
-      break;
-    case 'survivorsChanged':
-      for (const key of POP_KEYS) habs[key].habitat.removeExpired();
-      renderCounts();
-      renderSummary();
-      break;
     case 'reset':
-      ui.lifeLimit.value = '20';
       for (const key of POP_KEYS) {
         habs[key].habitat.rebuild();
         habs[key].insp = null;
@@ -392,7 +459,6 @@ director.on((ev) => {
       if (ev.stage === 3) {
         renderCounts();
         renderSummary();
-        renderChart();
       }
       renderHeader();
       break;
@@ -427,11 +493,29 @@ director.on((ev) => {
 });
 
 // ---------- 조작 ----------
-ui.release.addEventListener('click', () => director.startRelease());
-ui.step.addEventListener('click', () => director.step());
-ui.play.addEventListener('click', () => director.togglePlay());
-ui.lifeToggle.addEventListener('change', () => director.setLifespanEnabled(ui.lifeToggle.checked, Number(ui.lifeLimit.value)));
+ui.mode.addEventListener('change', () => {
+  if (observation) observation.running = false;
+  director.pause();
+  populationMode = ui.mode.checked;
+  showMode();
+});
+ui.limit.addEventListener('change', () => {
+  if (!populationMode || ui.limit.disabled) return;
+  observation = null;
+  showMode();
+});
+ui.release.addEventListener('click', () => {
+  if (populationMode) playOrPause();
+  else director.startRelease();
+});
+ui.step.addEventListener('click', step);
+ui.play.addEventListener('click', playOrPause);
 ui.reset.addEventListener('click', () => {
+  if (populationMode) {
+    observation = null;
+    showMode();
+    return;
+  }
   director.reset({ initialE: Number(ui.eSlider.value) });
   ui.lmoCard.hidden = true;
 });
@@ -448,7 +532,10 @@ ui.lmoBtn.addEventListener('click', () => {
   const show = ui.lmoCard.hidden;
   ui.lmoCard.hidden = !show;
   // 진행 중인 세대 교체는 마무리하고 그 화면을 유지한다
-  if (show) director.finishCurrentAndStop();
+  if (show && populationMode && observation) {
+    observation.running = false;
+    renderPopulationHeader();
+  } else if (show) director.finishCurrentAndStop();
 });
 $('.close', ui.lmoCard).addEventListener('click', () => (ui.lmoCard.hidden = true));
 ui.lmoHintsBtn.addEventListener('click', () => {
@@ -457,9 +544,8 @@ ui.lmoHintsBtn.addEventListener('click', () => {
 
 function renderHistoryTable(): void {
   const ex = director.experiment;
-  const observing = director.activity.kind === 'lifespan';
-  const m = observing ? shownHistory('mendel') : ex.mendel.history;
-  const d = observing ? shownHistory('drive') : ex.drive.history;
+  const m = ex.mendel.history;
+  const d = ex.drive.history;
   const head = `<thead><tr><th rowspan="2">세대</th><th colspan="5">멘델 유전 (e = 0)</th><th colspan="6">호밍 드라이브</th></tr>
     <tr><th>W/W</th><th>D/W</th><th>D/D</th><th>D 보유</th><th>D 빈도</th><th>e</th><th>W/W</th><th>D/W</th><th>D/D</th><th>D 보유</th><th>D 빈도</th></tr></thead>`;
   const rows = m
@@ -475,7 +561,10 @@ function renderHistoryTable(): void {
 }
 
 ui.modelBtn.addEventListener('click', () => {
-  director.pause();
+  if (populationMode && observation) {
+    observation.running = false;
+    renderPopulationHeader();
+  } else director.pause();
   renderHistoryTable();
   ui.dialog.showModal();
 });
@@ -490,11 +579,11 @@ document.addEventListener('keydown', (ev) => {
   if (t instanceof HTMLInputElement || t instanceof HTMLSelectElement) return;
   if (ev.code === 'Space') {
     ev.preventDefault();
-    if (!director.experiment.released && director.activity.kind !== 'lifespan') director.startRelease();
-    else director.togglePlay();
+    if (!populationMode && !director.experiment.released) director.startRelease();
+    else playOrPause();
   } else if (ev.code === 'ArrowRight') {
     ev.preventDefault();
-    director.step();
+    step();
   }
 });
 document.addEventListener('keyup', (ev) => {
@@ -522,26 +611,34 @@ new ResizeObserver(() => {
   if (Math.abs(fs - legendFs) > 0.5) {
     legendFs = fs;
     renderLegend();
-    renderSummary();
-    renderChart();
+    if (!populationMode) renderSummary();
   }
 }).observe(document.documentElement);
 
 // ---------- 애니메이션 루프 ----------
-let last = performance.now();
-function advanceFrame(dt: number, time: number): void {
-  director.tick(dt);
-  const a = director.activity;
-  if (a.kind === 'lifespan') {
-    const clock = `경과 ${a.elapsed.toFixed(1)}`;
-    if (ui.lifeClock.textContent !== clock) ui.lifeClock.textContent = clock;
+function frame(dt: number, time: number): void {
+  if (!populationMode || !observation) {
+    director.tick(dt);
+    for (const key of POP_KEYS) habs[key].habitat.frame(dt, time);
+    return;
   }
-  for (const key of POP_KEYS) habs[key].habitat.frame(dt, time);
+  const obs = observation;
+  const before = obs.tick;
+  const running = obs.running;
+  const changes = obs.groups.usual.births + obs.groups.usual.deaths + obs.groups.limited.births + obs.groups.limited.deaths;
+  obs.advance(dt, director.speed);
+  const elapsed = (obs.tick - before) / TICKS_PER_UNIT;
+  for (const key of POP_KEYS) habs[key].habitat.frameCommunity(obs.tick, elapsed);
+  if (before !== obs.tick) ui.clock.textContent = `경과 ${(obs.tick / TICKS_PER_UNIT).toFixed(1)}`;
+  if (running !== obs.running || Math.ceil(before / ROUND_TICKS) !== Math.ceil(obs.tick / ROUND_TICKS)) renderPopulationHeader();
+  if (changes !== obs.groups.usual.births + obs.groups.usual.deaths + obs.groups.limited.births + obs.groups.limited.deaths) renderPopulationCounts();
 }
+
+let last = performance.now();
 function loop(now: number): void {
   const dt = Math.min(0.25, Math.max(0, (now - last) / 1000));
   last = now;
-  advanceFrame(dt, now / 1000);
+  frame(dt, now / 1000);
   requestAnimationFrame(loop);
 }
 
@@ -554,16 +651,16 @@ requestAnimationFrame(loop);
 // 개발 및 검증용
 declare global {
   interface Window {
-    __sim: { director: Director; stages: typeof STAGES; advance: (seconds: number) => string };
+    __sim: { readonly population: PopulationObservation | null; director: Director; stages: typeof STAGES; advance: (seconds: number) => string };
   }
 }
 /** 검증용: 화면 프레임 속도와 무관하게 지정한 시간만큼 진행한다 */
 function advanceFor(seconds: number): string {
   const dt = 1 / 60;
   for (let t = 0; t < seconds; t += dt) {
-    advanceFrame(dt, performance.now() / 1000 + t);
+    frame(dt, performance.now() / 1000 + t);
   }
   const a = director.activity;
   return JSON.stringify({ activity: a.kind, stage: a.kind === 'generation' ? a.stage : null, generation: director.experiment.generation, held: director.held });
 }
-window.__sim = { director, stages: STAGES, advance: advanceFor };
+window.__sim = { get population() { return populationMode ? observation : null; }, director, stages: STAGES, advance: advanceFor };
